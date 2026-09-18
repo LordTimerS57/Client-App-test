@@ -1,32 +1,16 @@
 # Client-App-test
 
-Client React/Vite pour `Java-Services-Test`.
+## Connexion au backend
 
-## Démarrage
+En développement, configurez le proxy Vite avec `VITE_API_SERVER` (par défaut `http://localhost:8080/ExServ`) puis lancez :
 
 ```bash
 npm install
-npm run dev
-```
-
-L'application est disponible sur http://localhost:5173. En développement, les appels `/api` sont relayés vers `http://localhost:8080/ExServ` par Vite. Ajustez `VITE_API_SERVER` si le contexte de déploiement Java est différent :
-
-```bash
 VITE_API_SERVER=http://localhost:8080/ExServ npm run dev
 ```
 
-Pour une URL d'API publique ou un reverse proxy, copiez `.env.example` vers `.env` et définissez `VITE_API_URL`.
+Le frontend appelle `/api`; le proxy transmet vers le backend Java. En production, définissez `VITE_API_URL` avec l'URL complète, par exemple `http://localhost:8080/ExServ/api`, ou placez le frontend derrière le même reverse proxy.
 
-## API consommée
+## Endpoints compte
 
-Le backend Jersey expose son mapping sous `/api` :
-
-- `GET/POST /api/users`
-- `GET/PUT/DELETE /api/users/:matricule`
-- `GET /api/users/:matricule/messages`
-- `GET/POST /api/messages`
-- `GET/PUT/DELETE /api/messages/:id`
-- `PUT /api/messages/:id/signaler`
-- `PUT /api/messages/:id/masquer`
-
-Le formulaire de création de message utilise l'utilisateur sélectionné comme envoyeur. Le matricule d'un destinataire est facultatif pour créer un message public.
+Le client utilise les endpoints suivants : `POST /api/auth/register`, `POST /api/auth/login`, `PUT /api/users/{matricule}/profile`, `PUT /api/users/{matricule}/email` et `PUT /api/users/{matricule}/password`.
