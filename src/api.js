@@ -17,6 +17,7 @@ export const api = {
     messages: (matricule) => request(`/users/${encodeURIComponent(matricule)}/messages`),
   },
   auth: {
+    register: (user) => request('/auth/register', { method: 'POST', body: JSON.stringify(user) }),
     login: (credentials) => request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }),
   },
   messages: {

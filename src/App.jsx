@@ -68,7 +68,7 @@ function Register({ onLogin, onSuccess, onError }) {
     event.preventDefault(); setBusy(true); onError('')
     try {
       const { etudiant, ...values } = form
-      await api.users.create({ ...values, role: etudiant ? 'Etudiant' : 'Utilisateur', type: etudiant ? 'Etudiant' : 'Utilisateur', dateInscription: new Date().toISOString().slice(0, 10) })
+      await api.auth.register({ ...values, role: etudiant ? 'Etudiant' : 'Utilisateur', type: etudiant ? 'Etudiant' : 'Utilisateur', dateInscription: new Date().toISOString().slice(0, 10) })
       onSuccess()
     } catch (error) { onError(`Inscription impossible : ${error.message}`) } finally { setBusy(false) }
   }
@@ -87,6 +87,10 @@ function SuccessModal({ type, onContinue }) {
   return <div className="modal-backdrop"><div className="success-modal"><div className="success-icon">✓</div><h2>{registration ? 'Inscription terminée' : 'Connexion réussie'}</h2><p>{registration ? 'Merci d’être inscrit à Ne-laiko' : 'Vous pouvez passer à l’étape suivante'}</p><button onClick={onContinue}>{registration ? 'Continuer' : 'Ok'}</button></div></div>
 }
 
+function ErrorModal({ message, onClose }) {
+  return <div className="modal-backdrop"><div className="error-modal" role="alertdialog" aria-modal="true" aria-labelledby="error-title"><div className="error-icon">!</div><h2 id="error-title">Une erreur est survenue</h2><p>{message}</p><button onClick={onClose}>Ok</button></div></div>
+}
+
 function App() {
   const basePath = '/Ne-laiko'
   const routeToScreen = (path) => path === `${basePath}/login` ? 'login' : path === `${basePath}/register` ? 'register' : 'home'
@@ -102,11 +106,11 @@ function App() {
     setError(''); setScreen(next)
   }
   return <Shell>
-    {error && <div className="global-error" role="alert">{error}</div>}
     {screen === 'home' && <><header className="topbar"><button className="brand" onClick={() => show('home')} aria-label="Retour à l'accueil"><BrandMark /></button><nav><button className="nav-link" onClick={() => window.alert('Contactez-nous à contact@ne-laiko.fr')}>Contact</button><button className="signup-small" onClick={() => show('register')}>S'inscrire</button></nav></header><Home onLogin={() => show('login')} /></>}
     {screen === 'login' && <Login onRegister={() => show('register')} onSuccess={() => setModal('login')} onError={setError} />}
     {screen === 'register' && <Register onLogin={() => show('login')} onSuccess={() => setModal('register')} onError={setError} />}
     {modal && <SuccessModal type={modal} onContinue={() => { const current = modal; setModal(''); show(current === 'register' ? 'login' : 'home') }} />}
+    {error && <ErrorModal message={error} onClose={() => setError('')} />}
   </Shell>
 }
 
