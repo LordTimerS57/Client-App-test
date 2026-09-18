@@ -13,7 +13,11 @@ export const api = {
   users: {
     list: () => request('/users'),
     get: (matricule) => request(`/users/${encodeURIComponent(matricule)}`),
+    create: (user) => request('/users', { method: 'POST', body: JSON.stringify(user) }),
     messages: (matricule) => request(`/users/${encodeURIComponent(matricule)}/messages`),
+  },
+  auth: {
+    login: (credentials) => request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }),
   },
   messages: {
     list: () => request('/messages'),
