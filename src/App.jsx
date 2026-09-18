@@ -32,6 +32,19 @@ function FooterColumn({ title, items }) {
   return <div className="footer-column"><strong>{title}</strong>{items.map((item) => <span key={item}>{item}</span>)}</div>
 }
 
+function EyeIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.1 12s3.6-6 9.9-6 9.9 6 9.9 6-3.6 6-9.9 6-9.9-6-9.9-6Z" /><circle cx="12" cy="12" r="2.7" /></svg>
+}
+
+function EyeOffIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 3 18 18M10.6 6.2A10.2 10.2 0 0 1 12 6c6.3 0 9.9 6 9.9 6a16.7 16.7 0 0 1-3.1 3.5M6.2 6.8C3.5 8.5 2.1 12 2.1 12s3.6 6 9.9 6c1.1 0 2.1-.2 3-.5" /></svg>
+}
+
+function PasswordField({ name, value, onChange }) {
+  const [visible, setVisible] = useState(false)
+  return <div className="password-field"><input name={name} type={visible ? 'text' : 'password'} placeholder="••••••••••" value={value} onChange={onChange} required /><button className="password-toggle" type="button" onClick={() => setVisible(!visible)} aria-label={visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}>{visible ? <EyeIcon /> : <EyeOffIcon />}</button></div>
+}
+
 function AuthLayout({ title, subtitle, children, mode, onSwitch }) {
   return <main className="auth-page"><section className="auth-visual"><div className="visual-copy"><BrandMark /><h1>{mode === 'login' ? <>Commencez<br />l’aventure</> : 'Rejoignez-nous'}</h1><p>{mode === 'login' ? 'Grâce à Ne-laiko, vos soucis sur l’accessibilité et la compréhension des études sont épargnés.' : 'Accédez vos cours, demandez de l’aide au professeur ou via l’assistant IA et entraînez-vous sur notre plateforme d’apprentissage Ne-laiko.'}</p></div></section><section className="auth-form-wrap"><div className="auth-form"><h2>{title}</h2><p className="form-intro">{subtitle}</p>{children}<button className="switch-auth" onClick={onSwitch}>{mode === 'login' ? "Vous n’avez pas encore de compte, cliquez ici." : 'Vous avez déjà un compte ? Se connecter'}</button></div></section></main>
 }
@@ -54,7 +67,7 @@ function Login({ onRegister, onSuccess, onError }) {
   }
   return <AuthLayout mode="login" title="Se connecter à votre compte" subtitle="Remplissez vos informations pour continuer." onSwitch={onRegister}><form onSubmit={submit}>
     <label>Email<input name="email" type="email" placeholder="xxxxx@example.com" value={form.email} onChange={update} required /></label>
-    <label>Mot de passe<div className="password-field"><input name="motDePasse" type="password" placeholder="••••••••••" value={form.motDePasse} onChange={update} required /><span>◉</span></div></label>
+    <label>Mot de passe<PasswordField name="motDePasse" value={form.motDePasse} onChange={update} /></label>
     <button className="forgot" type="button">Avez-vous oublié votre mot de passe?</button>
     <label className="check-row"><input type="checkbox" checked={form.etudiant} onChange={(event) => setForm({ ...form, etudiant: event.target.checked })} /><span><b>Etudiant</b><small>Vous êtes étudiant</small></span></label>
     <button className="primary" disabled={busy}>{busy ? 'Connexion...' : 'Se connecter'}</button>
@@ -76,7 +89,7 @@ function Register({ onLogin, onSuccess, onError }) {
     <label>Matricule<input name="matricule" placeholder="XXXX-HE" value={form.matricule} onChange={update} required /></label>
     <div className="form-grid"><label>Nom<input name="nom" placeholder="Rakotosoa" value={form.nom} onChange={update} required /></label><label>Prénoms<input name="prenom" placeholder="Faly Hasy" value={form.prenom} onChange={update} required /></label></div>
     <label>Email<input name="email" type="email" placeholder="xxxxx@example.com" value={form.email} onChange={update} required /></label>
-    <label>Mot de passe<div className="password-field"><input name="motDePasse" type="password" placeholder="••••••••••" value={form.motDePasse} onChange={update} required /><span>◉</span></div></label>
+    <label>Mot de passe<PasswordField name="motDePasse" value={form.motDePasse} onChange={update} /></label>
     <label className="check-row"><input type="checkbox" checked={form.etudiant} onChange={(event) => setForm({ ...form, etudiant: event.target.checked })} /><span><b>Etudiant</b><small>Vous êtes étudiant</small></span></label>
     <button className="primary" disabled={busy}>{busy ? 'Création...' : 'Créer le compte'}</button>
   </form></AuthLayout>
