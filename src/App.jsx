@@ -1132,7 +1132,7 @@ function Comments({ user, onError, onPublished }) {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [replyingId, setReplyingId] = useState(null)
-  const [replyTest, setReplyText] = useState('')
+  const [replyText, setReplyText] = useState('')
   const [replySubmitting, setReplySubmitting] = useState(false)
 
   useEffect(() => { 
