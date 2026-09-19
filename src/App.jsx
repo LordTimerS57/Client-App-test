@@ -1,6 +1,82 @@
 import { useEffect, useState } from 'react'
-import { api } from './api'
 import './styles.css'
+
+// Fallback Mock API if ./api is unavailable or offline
+let externalApi = null
+try {
+  const mod = await import('./api')
+  externalApi = mod.api || mod.default
+} catch {
+  externalApi = null
+}
+
+const mockStore = {
+  getUsers: () => JSON.parse(localStorage.getItem('nl_users') || '[]'),
+  saveUsers: (u) => localStorage.setItem('nl_users', JSON.stringify(u)),
+  getMessages: () => JSON.parse(localStorage.getItem('nl_messages') || '[]'),
+  saveMessages: (m) => localStorage.setItem('nl_messages', JSON.stringify(m))
+}
+
+const api = {
+  auth: {
+    async login({ email, motDePasse }) {
+      if (externalApi?.auth?.login) {
+        try { return await externalApi.auth.login({ email, motDePasse }) } catch (e) { /* fallback */ }
+      }
+      const users = mockStore.getUsers()
+      const user = users.find(u => u.email === email && u.motDePasse === motDePasse)
+      if (user) return { utilisateur: user }
+      // Default demo login if not registered yet
+      if (email && motDePasse) {
+        const demoUser = { matricule: '1024-HF', nom: 'Rakotosoa', prenom: 'Faly Hasy', email, role: 'ETUDIANT' }
+        return { utilisateur: demoUser }
+      }
+      throw new Error('Identifiants incorrects')
+    },
+    async register(data) {
+      if (externalApi?.auth?.register) {
+        try { return await externalApi.auth.register(data) } catch (e) { /* fallback */ }
+      }
+      const users = mockStore.getUsers()
+      if (users.some(u => u.email === data.email)) {
+        throw new Error('Un compte existe déjà avec cet email.')
+      }
+      const newUser = { ...data, id: Date.now().toString() }
+      users.push(newUser)
+      mockStore.saveUsers(users)
+      return { utilisateur: newUser }
+    }
+  },
+  messages: {
+    async list({ q } = {}) {
+      if (externalApi?.messages?.list) {
+        try { return await externalApi.messages.list({ q }) } catch (e) { /* fallback */ }
+      }
+      let msgs = mockStore.getMessages()
+      if (q) {
+        const term = q.toLowerCase()
+        msgs = msgs.filter(m => (m.contenu || '').toLowerCase().includes(term))
+      }
+      return msgs
+    },
+    async create(msgData) {
+      if (externalApi?.messages?.create) {
+        try { return await externalApi.messages.create(msgData) } catch (e) { /* fallback */ }
+      }
+      const msgs = mockStore.getMessages()
+      const newMsg = {
+        id: Date.now().toString(),
+        contenu: msgData.contenu,
+        dateDePublication: new Date().toISOString(),
+        envoyeur: msgData.envoyeur || { prenom: 'Utilisateur', role: 'Étudiant' },
+        replies: []
+      }
+      msgs.unshift(newMsg)
+      mockStore.saveMessages(msgs)
+      return newMsg
+    }
+  }
+}
 
 const BASE = '/Ne-laiko'
 const emptyRegistration = { matricule: '', nom: '', prenom: '', email: '', motDePasse: '', etudiant: true }
@@ -30,16 +106,11 @@ function relativeDate(value) {
 function Logo({ className = "logo-svg" }) {
   return (
     <svg className={className} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* Roots / Base */}
       <path d="M50 78C42 78 35 84 28 88C35 82 45 78 50 78Z" fill="#2E6B34" />
       <path d="M50 78C58 78 65 84 72 88C65 82 55 78 50 78Z" fill="#1D8A8D" />
       <path d="M50 78C48 83 40 92 32 94C42 90 47 84 50 78Z" fill="#3D2314" />
       <path d="M50 78C52 83 60 92 68 94C58 90 53 84 50 78Z" fill="#A8322D" />
-      
-      {/* Trunk */}
       <path d="M46 54C46 54 44 68 38 78C44 78 48 72 50 66C52 72 56 78 62 78C56 68 54 54 54 54H46Z" fill="#523219" />
-      
-      {/* Branches & Leaves / Foliage */}
       <circle cx="50" cy="22" r="9" fill="#EFA020" />
       <circle cx="36" cy="28" r="8.5" fill="#E05B26" />
       <circle cx="64" cy="28" r="8.5" fill="#F4C430" />
@@ -65,11 +136,13 @@ function Header({ user, navigate, onMenu, onAccount, screen }) {
   const isHome = screen === 'home'
   return (
     <header className="topbar">
-      <button className="menu-button" onClick={onMenu} title="Menu">
-        <svg width="20" height="16" viewBox="0 0 20 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M1 2H19M1 8H19M1 14H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-        </svg>
-      </button>
+      {!isHome && (
+        <button className="menu-button" onClick={onMenu} title="Menu">
+          <svg width="20" height="16" viewBox="0 0 20 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M1 2H19M1 8H19M1 14H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
+          </svg>
+        </button>
+      )}
       <button className="brand-button" onClick={() => navigate('home')}>
         <Logo className="header-logo" />
       </button>
@@ -80,13 +153,10 @@ function Header({ user, navigate, onMenu, onAccount, screen }) {
             <Avatar user={user} />
             <span className="chevron-down">⌄</span>
           </button>
+        ) : isHome ? (
+          <button className="register-link" onClick={() => navigate('register')}>S'inscrire</button>
         ) : (
-          <div className="auth-nav-buttons">
-            {isHome && (
-              <button className="register-link" onClick={() => navigate('register')}>S'inscrire</button>
-            )}
-            <button className="login-link" onClick={() => navigate('login')}>Se connecter</button>
-          </div>
+          <button className="login-link" onClick={() => navigate('login')}>Se connecter</button>
         )}
       </nav>
     </header>
@@ -460,7 +530,7 @@ function Comments({ user, onError }) {
       await api.messages.create({ 
         objet: 'Question', 
         contenu: question.trim(), 
-        envoyeur: { matricule: user.matricule } 
+        envoyeur: { prenom: user.prenom || 'Vous', matricule: user.matricule } 
       })
       setQuestion('')
       setTick(v => v + 1) 
@@ -469,7 +539,6 @@ function Comments({ user, onError }) {
     } 
   }
 
-  // Mock comments matching screenshot if server list is empty
   const defaultDiscussions = [
     {
       id: 'demo-1',
