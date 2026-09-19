@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import './styles.css'
+import logo from './assets/logo.jpg' 
 
-// Fallback Mock API if ./api is unavailable or offline
 let externalApi = null
 try {
   const mod = await import('./api')
@@ -17,16 +17,121 @@ const mockStore = {
   saveMessages: (m) => localStorage.setItem('nl_messages', JSON.stringify(m))
 }
 
+function parseApiError(e) {
+  const msg = e?.message || e?.error || String(e || '')
+  if (msg.includes('502') || msg.toLowerCase().includes('bad gateway')) {
+    return new Error('Erreur de connexion au serveur (502 Bad Gateway). Veuillez réessayer dans quelques instants.')
+  }
+  if (msg.includes('500') || msg.toLowerCase().includes('internal server error')) {
+    return new Error('Erreur interne du serveur (500). Veuillez contacter l’administrateur si le problème persiste.')
+  }
+  if (msg.includes('503') || msg.toLowerCase().includes('service unavailable')) {
+    return new Error('Le service est temporairement indisponible. Réessayez ultérieurement.')
+  }
+  if (msg.includes('401') || msg.includes('403') || msg.toLowerCase().includes('unauthorized')) {
+    return new Error('Identifiants incorrects ou accès non autorisé.')
+  }
+  if (msg.includes('Failed to fetch') || msg.toLowerCase().includes('network') || msg.toLowerCase().includes('réseau')) {
+    return new Error('Problème de connexion réseau. Impossible de contacter le serveur.')
+  }
+  return new Error(msg || 'Une erreur survenue lors du traitement.')
+}
+
+async function callExternal(fn, payload) {
+  try {
+    const res = await fn(payload)
+    if (res?.error || (res?.status && res?.status >= 400)) {
+      throw new Error(res?.message || res?.error || `Erreur serveur (${res?.status || 500})`)
+    }
+    return res
+  } catch (e) {
+    throw parseApiError(e)
+  }
+}
+
+const toList = (res, keys = []) => {
+  if (Array.isArray(res)) return res
+  for (const key of keys) if (Array.isArray(res?.[key])) return res[key]
+  return []
+}
+
+// Nombre de signalements d'un message (le champ exact dépend du backend : booléen, nombre ou liste)
+const reportCount = message => {
+  const value = message?.signale ?? message?.signaled ?? message?.reported ?? message?.signalements ?? message?.nbSignalements
+  if (Array.isArray(value)) return value.length
+  if (typeof value === 'number') return value
+  return value === true || value === 'true' ? 1 : 0
+}
+
+const normalizeRole = role => String(role || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
+const isStaffRole = role => /^(ADMIN|PROF)/.test(normalizeRole(role))
+const roleLabel = role => {
+  const r = normalizeRole(role)
+  return r.startsWith('ADMIN') ? 'Administrateur' : r.startsWith('PROF') ? 'Professeur' : 'Étudiant'
+}
+// Recherche insensible à la casse et aux accents
+const norm = text => String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+const roleKey = role => {
+  const r = normalizeRole(role)
+  return r.startsWith('ADMIN') ? 'admin' : r.startsWith('PROF') ? 'prof' : 'etudiant'
+}
+const ROLE_FILTERS = [
+  { key: 'all', label: 'Tous' },
+  { key: 'etudiant', label: 'Étudiants' },
+  { key: 'prof', label: 'Professeurs' },
+  { key: 'admin', label: 'Administrateurs' }
+]
+const byDateDesc = (a, b) => (Date.parse(b?.dateDePublication) || 0) - (Date.parse(a?.dateDePublication) || 0)
+
+function withoutPassword(user) {
+  const { motDePasse, ...safe } = user
+  return safe
+}
+
+// Mode démo (sans backend) : mêmes règles et mêmes messages que UserAccountResource.
+// `check` (règles métier) s'exécute APRÈS la vérification du mot de passe, comme sur le serveur.
+function mockUpdateUser(user, changes, { currentPassword, check, verify = true } = {}) {
+  const users = mockStore.getUsers()
+  const index = users.findIndex(u =>
+    (user?.matricule && u.matricule === user.matricule) || (user?.email && u.email === user.email)
+  )
+
+  if (verify) {
+    if (index >= 0) {
+      if (users[index].motDePasse !== currentPassword) throw new Error('Mot de passe incorrect')
+    } else if (!currentPassword) {
+      // Session de démonstration (aucun compte enregistré) : toute confirmation non vide est acceptée
+      throw new Error('Mot de passe incorrect')
+    }
+  }
+
+  check?.(users)
+
+  if (index >= 0) {
+    users[index] = { ...users[index], ...changes }
+    mockStore.saveUsers(users)
+    return withoutPassword(users[index])
+  }
+  return withoutPassword({ ...user, ...changes })
+}
+
 const api = {
   auth: {
     async login({ email, motDePasse }) {
       if (externalApi?.auth?.login) {
-        try { return await externalApi.auth.login({ email, motDePasse }) } catch (e) { /* fallback */ }
+        try {
+          const res = await externalApi.auth.login({ email, motDePasse })
+          if (res?.error || (res?.status && res?.status >= 400)) {
+            throw new Error(res?.message || res?.error || `Erreur serveur (${res?.status || 500})`)
+          }
+          return res
+        } catch (e) {
+          throw parseApiError(e)
+        }
       }
       const users = mockStore.getUsers()
       const user = users.find(u => u.email === email && u.motDePasse === motDePasse)
       if (user) return { utilisateur: user }
-      // Default demo login if not registered yet
       if (email && motDePasse) {
         const demoUser = { matricule: '1024-HF', nom: 'Rakotosoa', prenom: 'Faly Hasy', email, role: 'ETUDIANT' }
         return { utilisateur: demoUser }
@@ -35,7 +140,15 @@ const api = {
     },
     async register(data) {
       if (externalApi?.auth?.register) {
-        try { return await externalApi.auth.register(data) } catch (e) { /* fallback */ }
+        try {
+          const res = await externalApi.auth.register(data)
+          if (res?.error || (res?.status && res?.status >= 400)) {
+            throw new Error(res?.message || res?.error || `Erreur serveur (${res?.status || 500})`)
+          }
+          return res
+        } catch (e) {
+          throw parseApiError(e)
+        }
       }
       const users = mockStore.getUsers()
       if (users.some(u => u.email === data.email)) {
@@ -68,17 +181,91 @@ const api = {
         id: Date.now().toString(),
         contenu: msgData.contenu,
         dateDePublication: new Date().toISOString(),
-        envoyeur: msgData.envoyeur || { prenom: 'Utilisateur', role: 'Étudiant' },
+        envoyeur: msgData.envoyeur || { prenom: 'Vous', role: 'Étudiant' },
         replies: []
       }
       msgs.unshift(newMsg)
       mockStore.saveMessages(msgs)
       return newMsg
     }
+  },
+  // Lecture seule pour l'espace de modération (les erreurs remontent, pas de repli silencieux)
+  moderation: {
+    async users() {
+      if (externalApi?.users?.list) {
+        const res = await callExternal(externalApi.users.list)
+        return toList(res, ['utilisateurs', 'users']).map(withoutPassword)
+      }
+      return mockStore.getUsers().map(withoutPassword)
+    },
+    async comments() {
+      const list = externalApi?.messages?.list
+        ? toList(await callExternal(externalApi.messages.list, {}), ['messages'])
+        : mockStore.getMessages()
+      return [...list].sort(byDateDesc)
+    },
+    async reports() {
+      const comments = await api.moderation.comments()
+      return comments.filter(m => reportCount(m) > 0).sort((a, b) => reportCount(b) - reportCount(a) || byDateDesc(a, b))
+    }
+  },
+  account: {
+    async updateProfile({ user, nom, prenom, currentPassword }) {
+      if (externalApi?.account?.updateProfile) {
+        return callExternal(externalApi.account.updateProfile, { user, nom, prenom, currentPassword })
+      }
+      return { utilisateur: mockUpdateUser(user, { nom, prenom }, { currentPassword }) }
+    },
+    async updateEmail({ user, email, currentPassword }) {
+      if (externalApi?.account?.updateEmail) {
+        return callExternal(externalApi.account.updateEmail, { user, email, currentPassword })
+      }
+      const normalized = email.trim().toLowerCase()
+      const check = users => {
+        const taken = users.some(u =>
+          u.email?.toLowerCase() === normalized && u.email?.toLowerCase() !== user?.email?.toLowerCase()
+        )
+        if (taken) throw new Error('Email déjà utilisé')
+      }
+      return { utilisateur: mockUpdateUser(user, { email: normalized }, { currentPassword, check }) }
+    },
+    async updatePassword({ user, newPassword }) {
+      if (externalApi?.account?.updatePassword) {
+        return callExternal(externalApi.account.updatePassword, { user, newPassword })
+      }
+      if (!newPassword || newPassword.length < 8) {
+        throw new Error('Le nouveau mot de passe doit contenir au moins 8 caractères')
+      }
+      return { utilisateur: mockUpdateUser(user, { motDePasse: newPassword }, { verify: false }) }
+    }
   }
 }
 
 const BASE = '/Ne-laiko'
+
+const ROUTES = {
+  home: `${BASE}/`,
+  login: `${BASE}/login`,
+  register: `${BASE}/register`,
+  study: `${BASE}/study`,
+  comments: `${BASE}/study/comments`,
+  moderation: `${BASE}/moderation`,
+  'moderation-users': `${BASE}/moderation/users`,
+  'moderation-comments': `${BASE}/moderation/comments`,
+  'moderation-reports': `${BASE}/moderation/reports`,
+  'edit-profile': `${BASE}/account/profile`,
+  'edit-email': `${BASE}/account/email`,
+  'edit-password': `${BASE}/account/password`
+}
+
+const EDIT_SCREENS = ['edit-profile', 'edit-email', 'edit-password']
+const MODERATION_SCREENS = ['moderation', 'moderation-users', 'moderation-comments', 'moderation-reports']
+
+// Compte administrateur : e-mail défini dans .env (VITE_ADMIN_EMAIL) ou rôle 'ADMIN' renvoyé par le backend.
+// ⚠ Simple aiguillage d'interface : les droits réels doivent aussi être contrôlés côté serveur.
+const ADMIN_EMAIL = (import.meta.env?.VITE_ADMIN_EMAIL || 'admin@ne-laiko.com').trim().toLowerCase()
+const isAdmin = user =>
+  !!user && (String(user.role || '').toUpperCase() === 'ADMIN' || (user.email || '').trim().toLowerCase() === ADMIN_EMAIL)
 const emptyRegistration = { matricule: '', nom: '', prenom: '', email: '', motDePasse: '', etudiant: true }
 
 function pathToScreen(path = window.location.pathname) {
@@ -87,6 +274,13 @@ function pathToScreen(path = window.location.pathname) {
   if (clean === `${BASE}/register` || clean === '/register') return 'register'
   if (clean === `${BASE}/study/comments` || clean === '/study/comments') return 'comments'
   if (clean === `${BASE}/study` || clean === '/study') return 'study'
+  if (clean === `${BASE}/moderation/users` || clean === '/moderation/users') return 'moderation-users'
+  if (clean === `${BASE}/moderation/comments` || clean === '/moderation/comments') return 'moderation-comments'
+  if (clean === `${BASE}/moderation/reports` || clean === '/moderation/reports') return 'moderation-reports'
+  if (clean === `${BASE}/moderation` || clean === '/moderation') return 'moderation'
+  if (clean === `${BASE}/account/profile` || clean === '/account/profile') return 'edit-profile'
+  if (clean === `${BASE}/account/email` || clean === '/account/email') return 'edit-email'
+  if (clean === `${BASE}/account/password` || clean === '/account/password') return 'edit-password'
   return 'home'
 }
 
@@ -105,25 +299,11 @@ function relativeDate(value) {
 
 function Logo({ className = "logo-svg" }) {
   return (
-    <svg className={className} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M50 78C42 78 35 84 28 88C35 82 45 78 50 78Z" fill="#2E6B34" />
-      <path d="M50 78C58 78 65 84 72 88C65 82 55 78 50 78Z" fill="#1D8A8D" />
-      <path d="M50 78C48 83 40 92 32 94C42 90 47 84 50 78Z" fill="#3D2314" />
-      <path d="M50 78C52 83 60 92 68 94C58 90 53 84 50 78Z" fill="#A8322D" />
-      <path d="M46 54C46 54 44 68 38 78C44 78 48 72 50 66C52 72 56 78 62 78C56 68 54 54 54 54H46Z" fill="#523219" />
-      <circle cx="50" cy="22" r="9" fill="#EFA020" />
-      <circle cx="36" cy="28" r="8.5" fill="#E05B26" />
-      <circle cx="64" cy="28" r="8.5" fill="#F4C430" />
-      <circle cx="25" cy="38" r="8" fill="#C8372D" />
-      <circle cx="75" cy="38" r="8" fill="#88B04B" />
-      <circle cx="21" cy="52" r="7.5" fill="#1D8A8D" />
-      <circle cx="79" cy="52" r="7.5" fill="#2E6B34" />
-      <circle cx="33" cy="46" r="9.5" fill="#D94125" />
-      <circle cx="67" cy="46" r="9.5" fill="#2A8B88" />
-      <circle cx="50" cy="38" r="11" fill="#E58A13" />
-      <circle cx="41" cy="52" r="8" fill="#A42921" />
-      <circle cx="59" cy="52" r="8" fill="#1B6063" />
-    </svg>
+    <img 
+      className={className} 
+      src={logo} 
+      alt="Logo" 
+    />
   )
 }
 
@@ -135,17 +315,19 @@ function Avatar({ user, name = 'F' }) {
 function Header({ user, navigate, onMenu, onAccount, screen }) {
   const isHome = screen === 'home'
   return (
-    <header className="topbar">
-      {!isHome && (
-        <button className="menu-button" onClick={onMenu} title="Menu">
-          <svg width="20" height="16" viewBox="0 0 20 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M1 2H19M1 8H19M1 14H19" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-          </svg>
+    <header className={`topbar ${!isHome ? 'topbar-light' : ''}`}>
+      <div className="topbar-left">
+        {!isHome && (
+          <button className="menu-button" onClick={onMenu} title="Menu">
+            <svg width="18" height="14" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M1 1H17M1 7H17M1 13H17" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+            </svg>
+          </button>
+        )}
+        <button className="brand-button" onClick={() => navigate('home')}>
+          <Logo className="header-logo" />
         </button>
-      )}
-      <button className="brand-button" onClick={() => navigate('home')}>
-        <Logo className="header-logo" />
-      </button>
+      </div>
       <nav className="header-nav">
         <button className="contact-link">Contact</button>
         {user ? (
@@ -153,31 +335,46 @@ function Header({ user, navigate, onMenu, onAccount, screen }) {
             <Avatar user={user} />
             <span className="chevron-down">⌄</span>
           </button>
-        ) : isHome ? (
-          <button className="register-link" onClick={() => navigate('register')}>S'inscrire</button>
         ) : (
-          <button className="login-link" onClick={() => navigate('login')}>Se connecter</button>
+          <button className="register-link" onClick={() => navigate('register')}>S'inscrire</button>
         )}
       </nav>
     </header>
   )
 }
 
-function Menu({ open, close, navigate }) {
+function Menu({ open, close, navigate, admin }) {
   if (!open) return null
   return (
     <>
       <div className="menu-backdrop" onClick={close}/>
       <aside className="side-menu">
-        <div className="menu-header">
-          <span className="menu-label">Cours</span>
-          <strong>Analyse 2</strong>
-        </div>
+        {admin ? (
+          <button type="button" className="menu-header menu-header-link" onClick={() => navigate('moderation')}>
+            <span className="menu-label">Administration</span>
+            <strong>Modération</strong>
+          </button>
+        ) : (
+          <div className="menu-header">
+            <span className="menu-label">Cours</span>
+            <strong>Analyse 2</strong>
+          </div>
+        )}
         <nav className="menu-links">
-          <button onClick={() => navigate('study')}>Assistant IA</button>
-          <button onClick={() => navigate('comments')}>Commentaires</button>
-          <button onClick={() => navigate('study')}>Méthodologie</button>
-          <button onClick={() => navigate('study')}>Révision</button>
+          {admin ? (
+            <>
+              <button onClick={() => navigate('moderation-users')}>Utilisateurs</button>
+              <button onClick={() => navigate('moderation-comments')}>Commentaires</button>
+              <button onClick={() => navigate('moderation-reports')}>Signalements</button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => navigate('study')}>Assistant IA</button>
+              <button onClick={() => navigate('comments')}>Commentaires</button>
+              <button onClick={() => navigate('study')}>Méthodologie</button>
+              <button onClick={() => navigate('study')}>Révision</button>
+            </>
+          )}
         </nav>
       </aside>
     </>
@@ -188,10 +385,9 @@ function Home({ navigate }) {
   return (
     <>
       <section className="welcome-hero">
-        <div className="hero-overlay"></div>
         <div className="hero-content">
           <h1>Bienvenue sur Ne-laiko</h1>
-          <p>La clé de votre réussite<br/>universitaire avant tout</p>
+          <p>La clé de votre réussite{"\n"}universitaire avant tout</p>
           <button className="hero-button" onClick={() => navigate('login')}>Commencer</button>
         </div>
       </section>
@@ -208,10 +404,15 @@ function Footer() {
           <Logo className="footer-logo" />
           <div className="contact-icons">
             <span className="contact-icon" title="Téléphone">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+              </svg>
             </span>
             <span className="contact-icon" title="Email">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
+                <polyline points="22,6 12,13 2,6"/>
+              </svg>
             </span>
           </div>
         </div>
@@ -226,7 +427,7 @@ function Footer() {
         
         <div className="footer-col">
           <strong>Explorations</strong>
-          <span>Méthodologies d’apprentissage</span>
+          <span>Méthodologies d'apprentissage</span>
           <span>Cours, cursus</span>
         </div>
         
@@ -234,8 +435,8 @@ function Footer() {
           <strong>Ressources</strong>
           <span>Assistant IA</span>
           <span>Forum étudiants-professeurs</span>
-          <span>Plateforme d’examen en ligne</span>
-          <span>Plateforme d’étude en ligne</span>
+          <span>Plateforme d'examen en ligne</span>
+          <span>Plateforme d'étude en ligne</span>
           <span>Aide</span>
         </div>
       </div>
@@ -276,9 +477,15 @@ function Auth({ mode, navigate, onSuccess, onError }) {
             email: form.email, 
             motDePasse: form.motDePasse 
           })
-      onSuccess(result?.utilisateur || result) 
+
+      const user = result?.utilisateur || result?.user || (result?.email ? result : null)
+      if (!user) {
+        throw new Error(result?.message || result?.error || 'Échec d’authentification : données invalides.')
+      }
+
+      onSuccess(user, register ? 'register' : 'login') 
     } catch (error) { 
-      onError(`${register ? 'Inscription' : 'Connexion'} impossible : ${error.message}`) 
+      onError(error.message || 'Une erreur est survenue.') 
     } finally { 
       setBusy(false) 
     } 
@@ -293,14 +500,20 @@ function Auth({ mode, navigate, onSuccess, onError }) {
             <Logo className="auth-logo" />
           </div>
           <h1>{register ? 'Rejoignez-nous' : 'Commencez\nl\'aventure'}</h1>
-          <p>Grace à Ne-laiko, vos soucis sur l'accessibilité et la compréhension des études sont épargnez.</p>
+          <p>
+            {register 
+              ? "Accédez vos cours, demandez de l'aide au professeur ou via l'assistant IA et entraînez-vous sur notre plateforme d'apprentissage Ne-laiko." 
+              : "Grace à Ne-laiko, vos soucis sur l'accessibilité et la compréhension des études sont épargnez."}
+          </p>
         </div>
       </section>
 
       <section className="auth-form-container">
         <div className="auth-form-wrapper">
           <h1>{register ? 'Créer un compte' : 'Se connecter à votre compte'}</h1>
-          <p className="auth-subtitle">Remplissez vos informations pour continuer.</p>
+          <p className="auth-subtitle">
+            {register ? 'Remplissez vos informations pour commencer.' : 'Remplissez vos informations pour continuer.'}
+          </p>
 
           <form onSubmit={submit} className="auth-form">
             {register && (
@@ -375,7 +588,7 @@ function Auth({ mode, navigate, onSuccess, onError }) {
                   onClick={() => setShowPassword(!showPassword)}
                   aria-label="Afficher ou masquer le mot de passe"
                 >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.8">
                     {showPassword ? (
                       <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" />
                     ) : (
@@ -434,7 +647,7 @@ function Study({ navigate }) {
       title: 'Méthodologie',
       text: 'Suivez votre progression étape par étape.',
       icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
           <line x1="8" y1="6" x2="21" y2="6"/>
           <line x1="8" y1="12" x2="21" y2="12"/>
           <line x1="8" y1="18" x2="21" y2="18"/>
@@ -449,7 +662,7 @@ function Study({ navigate }) {
       title: 'Assistant IA',
       text: 'Posez vos questions à l\'assistant intelligent.',
       icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
       )
@@ -459,17 +672,17 @@ function Study({ navigate }) {
       title: 'Commentaires',
       text: 'Échangez avec étudiants et professeurs.',
       icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
       )
     },
     {
       id: 'revision',
-      title: 'Révision',
-      text: 'Repassez un examen pour voir où vous en êtes actuellement.',
+      title: 'Revision',
+      text: 'Repassez un examen pour voir où vous en êtes actuellement',
       icon: (
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
         </svg>
       )
@@ -505,11 +718,329 @@ function Study({ navigate }) {
   ) 
 }
 
-function Comments({ user, onError }) { 
+function Moderation({ navigate }) {
+  const icon = paths => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      {paths}
+    </svg>
+  )
+
+  const cards = [
+    {
+      id: 'users',
+      to: 'moderation-users',
+      title: 'Utilisateurs',
+      text: 'Consultez les comptes étudiants et professeurs.',
+      icon: icon(<><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>)
+    },
+    {
+      id: 'comments',
+      to: 'moderation-comments',
+      title: 'Commentaires',
+      text: 'Consultez les discussions publiées.',
+      icon: icon(<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>)
+    },
+    {
+      id: 'reports',
+      to: 'moderation-reports',
+      title: 'Signalements',
+      text: 'Examinez les commentaires signalés.',
+      icon: icon(<><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></>)
+    },
+    {
+      id: 'activity',
+      title: 'Activités',
+      text: 'Suivez l’activité de la plateforme.',
+      icon: icon(<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>)
+    }
+  ]
+
+  return (
+    <>
+      <main className="study-space">
+        <div className="study-header">
+          <h1>Espace de modération</h1>
+          <p>Analyse 2 - Suivi des échanges</p>
+        </div>
+
+        <section className="study-grid">
+          {cards.map(card => (
+            <button
+              className="study-card"
+              key={card.id}
+              onClick={() => card.to && navigate(card.to)}
+            >
+              <div className="study-icon-wrapper">
+                {card.icon}
+              </div>
+              <h2>{card.title}</h2>
+              <p>{card.text}</p>
+            </button>
+          ))}
+        </section>
+      </main>
+      <Footer/>
+    </>
+  )
+}
+
+const MODERATION_PAGES = {
+  users: {
+    title: 'Utilisateurs',
+    subtitle: 'Analyse 2 - Comptes inscrits',
+    placeholder: 'Rechercher par nom ou matricule...',
+    empty: 'Aucun utilisateur inscrit.',
+    unit: ['utilisateur', 'utilisateurs']
+  },
+  comments: {
+    title: 'Commentaires',
+    subtitle: 'Analyse 2 - Discussions publiées',
+    placeholder: 'Rechercher un commentaire, un nom ou un matricule...',
+    empty: 'Aucun commentaire publié.',
+    unit: ['commentaire', 'commentaires']
+  },
+  reports: {
+    title: 'Signalements',
+    subtitle: 'Analyse 2 - Commentaires signalés',
+    placeholder: 'Rechercher un commentaire, un nom ou un matricule...',
+    empty: 'Aucun commentaire signalé.',
+    unit: ['signalement', 'signalements']
+  }
+}
+
+const commentAuthor = item => item.envoyeur || item.author || {}
+const userText = user => [user.prenom, user.nom, user.matricule, user.email].join(' ')
+const commentText = item => {
+  const author = commentAuthor(item)
+  return [item.contenu || item.content, author.prenom, author.nom, author.matricule].join(' ')
+}
+
+// Ligne d'accordéon générique : en-tête cliquable + panneau de détails
+function AccordionItem({ id, open, onToggle, avatar, staff, title, roleText, meta, preview, aside, children }) {
+  const panelId = `accordion-panel-${id}`
+  return (
+    <article className={`accordion-item ${open ? 'open' : ''}`}>
+      <button type="button" className="accordion-header" onClick={onToggle} aria-expanded={open} aria-controls={panelId}>
+        <span className={`discussion-avatar ${staff ? 'prof-avatar' : ''}`}>{avatar}</span>
+        <span className="accordion-main">
+          <span className="author-title">
+            <strong>{title}</strong>
+            <span className={`role-badge ${staff ? 'prof-badge' : ''}`}>{roleText}</span>
+          </span>
+          {meta && <small className="time-ago">{meta}</small>}
+          {preview && !open && <span className="accordion-preview">{preview}</span>}
+        </span>
+        {aside}
+        <svg className="accordion-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="6 9 12 15 18 9"/>
+        </svg>
+      </button>
+      {open && <div className="accordion-panel" id={panelId} role="region">{children}</div>}
+    </article>
+  )
+}
+
+function UserRow({ id, user, open, onToggle }) {
+  const name = [user.prenom, user.nom].filter(Boolean).join(' ') || 'Utilisateur'
+  return (
+    <AccordionItem
+      id={id}
+      open={open}
+      onToggle={onToggle}
+      avatar={(user.prenom || user.nom || 'U')[0].toUpperCase()}
+      staff={isStaffRole(user.role)}
+      title={name}
+      roleText={roleLabel(user.role)}
+      meta={user.matricule}
+    >
+      <dl className="mod-details">
+        <div><dt>Prénoms</dt><dd>{user.prenom || '—'}</dd></div>
+        <div><dt>Nom</dt><dd>{user.nom || '—'}</dd></div>
+        <div><dt>Matricule</dt><dd>{user.matricule || '—'}</dd></div>
+        <div><dt>Email</dt><dd>{user.email || '—'}</dd></div>
+      </dl>
+    </AccordionItem>
+  )
+}
+
+function CommentRow({ id, item, open, onToggle }) {
+  const author = commentAuthor(item)
+  const name = author.prenom || 'Utilisateur'
+  const content = item.contenu || item.content || ''
+  const reports = reportCount(item)
+  const allReplies = item.replies || []
+  const replies = allReplies.filter(reply => reply && typeof reply === 'object')
+  const repliesCount = item.repliesCount ?? allReplies.length
+  const published = new Date(item.dateDePublication)
+  const fullDate = Number.isNaN(published.getTime())
+    ? ''
+    : published.toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
+
+  return (
+    <AccordionItem
+      id={id}
+      open={open}
+      onToggle={onToggle}
+      avatar={name[0].toUpperCase()}
+      staff={isStaffRole(item.authorRole)}
+      title={name}
+      roleText={roleLabel(item.authorRole)}
+      meta={relativeDate(item.dateDePublication)}
+      preview={content}
+      aside={
+        <span className="accordion-aside">
+          {reports > 0 && <span className="report-badge">{reports} signalement{reports > 1 ? 's' : ''}</span>}
+          <span className="replies-count">{repliesCount} réponse{repliesCount > 1 ? 's' : ''}</span>
+        </span>
+      }
+    >
+      <p className="discussion-content">{content}</p>
+      <p className="accordion-meta">
+        {[author.matricule && `Matricule ${author.matricule}`, fullDate].filter(Boolean).join(' · ')}
+      </p>
+      {replies.length > 0 && (
+        <div className="replies-container">
+          {replies.map((reply, index) => {
+            const replyAuthor = reply.author || reply.envoyeur || {}
+            return (
+              <div className="reply-card" key={reply.id ?? index}>
+                <div className="author-title">
+                  <strong>{replyAuthor.prenom || 'Utilisateur'}</strong>
+                  <span className={`role-badge ${isStaffRole(replyAuthor.role) ? 'prof-badge' : ''}`}>{roleLabel(replyAuthor.role)}</span>
+                </div>
+                <p className="reply-content">{reply.content || reply.contenu}</p>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </AccordionItem>
+  )
+}
+
+// Recherche + filtre par rôle (pastilles)
+function ModerationToolbar({ search, onSearch, role, onRole, placeholder }) {
+  return (
+    <div className="mod-toolbar">
+      <div className="search-input-wrapper mod-search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
+          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+        </svg>
+        <input
+          value={search}
+          onChange={e => onSearch(e.target.value)}
+          placeholder={placeholder}
+          aria-label="Rechercher"
+        />
+      </div>
+      <div className="mod-chips" role="group" aria-label="Filtrer par rôle">
+        {ROLE_FILTERS.map(filter => (
+          <button
+            type="button"
+            key={filter.key}
+            className={`mod-chip ${role === filter.key ? 'active' : ''}`}
+            aria-pressed={role === filter.key}
+            onClick={() => onRole(filter.key)}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// Pages de modération : kind = 'users' | 'comments' | 'reports' (accordéon, lecture seule)
+function ModerationList({ kind, onError }) {
+  const page = MODERATION_PAGES[kind]
+  const [items, setItems] = useState(null) // null = chargement en cours
+  const [search, setSearch] = useState('')
+  const [role, setRole] = useState('all')
+  const [openId, setOpenId] = useState(null) // un seul élément ouvert à la fois
+
+  useEffect(() => {
+    let alive = true
+    // Pour les commentaires, le rôle de l'auteur est retrouvé via son matricule (liste des utilisateurs)
+    const loadRoles = kind === 'users'
+      ? Promise.resolve({})
+      : api.moderation.users()
+          .then(list => Object.fromEntries(list.filter(u => u.matricule).map(u => [u.matricule, u.role])))
+          .catch(() => ({}))
+
+    Promise.all([api.moderation[kind](), loadRoles])
+      .then(([list, roles]) => {
+        if (!alive) return
+        setItems(kind === 'users'
+          ? list
+          : list.map(item => {
+              const author = commentAuthor(item)
+              return { ...item, authorRole: author.role || roles[author.matricule] }
+            }))
+      })
+      .catch(e => { if (alive) { setItems([]); onError(e.message) } })
+    return () => { alive = false }
+  }, [kind])
+
+  const terms = norm(search).split(/\s+/).filter(Boolean)
+  const visible = (items || []).filter(item => {
+    const itemRole = kind === 'users' ? item.role : item.authorRole
+    if (role !== 'all' && roleKey(itemRole) !== role) return false
+    const text = norm(kind === 'users' ? userText(item) : commentText(item))
+    return terms.every(term => text.includes(term))
+  })
+  const filtered = terms.length > 0 || role !== 'all'
+  const unit = page.unit[(filtered ? items.length : visible.length) > 1 ? 1 : 0]
+
+  return (
+    <>
+      <main className="study-space">
+        <div className="study-header">
+          <h1>{page.title}</h1>
+          <p>{page.subtitle}</p>
+        </div>
+
+        <div className="mod-content">
+          <ModerationToolbar
+            search={search}
+            onSearch={setSearch}
+            role={role}
+            onRole={setRole}
+            placeholder={page.placeholder}
+          />
+
+          {items === null && <p className="mod-empty">Chargement...</p>}
+          {items?.length === 0 && <p className="mod-empty">{page.empty}</p>}
+          {items?.length > 0 && visible.length === 0 && <p className="mod-empty">Aucun résultat pour cette recherche.</p>}
+          {visible.length > 0 && (
+            <p className="mod-count">
+              {visible.length}{filtered ? ` sur ${items.length}` : ''} {unit}
+            </p>
+          )}
+
+          <section className="mod-list">
+            {visible.map((item, index) => {
+              const id = String((kind === 'users' ? (item.matricule || item.id || item.email) : item.id) ?? `row-${index}`)
+              const open = openId === id
+              const toggle = () => setOpenId(open ? null : id)
+              return kind === 'users'
+                ? <UserRow key={id} id={id} user={item} open={open} onToggle={toggle} />
+                : <CommentRow key={id} id={id} item={item} open={open} onToggle={toggle} />
+            })}
+          </section>
+        </div>
+      </main>
+      <Footer/>
+    </>
+  )
+}
+
+function Comments({ user, onError, onPublished }) { 
   const [messages, setMessages] = useState([])
   const [search, setSearch] = useState('')
   const [question, setQuestion] = useState('')
   const [tick, setTick] = useState(0)
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [publishing, setPublishing] = useState(false)
 
   useEffect(() => { 
     api.messages.list({ q: search })
@@ -522,21 +1053,33 @@ function Comments({ user, onError }) {
     return () => clearInterval(t) 
   }, [])
 
-  async function publish(e) { 
+  // 1) Clic sur "Publier" : simple validation du formulaire, on ouvre la confirmation (aucun appel back)
+  function requestPublish(e) {
     e.preventDefault()
     if (!user) return onError('Connectez-vous pour publier.')
     if (!question.trim()) return
-    try { 
-      await api.messages.create({ 
-        objet: 'Question', 
-        contenu: question.trim(), 
-        envoyeur: { prenom: user.prenom || 'Vous', matricule: user.matricule } 
+    setConfirmOpen(true)
+  }
+
+  // 2) Clic sur "Oui" : appel back, puis ouverture du dialogue de validation
+  async function confirmPublish() {
+    setPublishing(true)
+    try {
+      await api.messages.create({
+        objet: 'Question',
+        contenu: question.trim(),
+        envoyeur: { prenom: user.prenom || 'Vous', matricule: user.matricule }
       })
       setQuestion('')
-      setTick(v => v + 1) 
-    } catch(e) { 
-      onError(e.message) 
-    } 
+      setTick(v => v + 1)
+      setConfirmOpen(false)
+      onPublished()
+    } catch (e) {
+      setConfirmOpen(false)
+      onError(e.message)
+    } finally {
+      setPublishing(false)
+    }
   }
 
   const defaultDiscussions = [
@@ -550,7 +1093,7 @@ function Comments({ user, onError }) {
     },
     {
       id: 'demo-2',
-      author: { prenom: 'Marie Leclerc', role: 'Étudiante', initials: 'ML' },
+      author: { prenom: 'Marie Leclerc', role: 'Étudiante', initials: 'ML', isOther: true },
       date: 'il y a 2h',
       content: "Quelqu'un peut m'expliquer la différence entre intégrale simple et double ?",
       repliesCount: 2,
@@ -577,7 +1120,7 @@ function Comments({ user, onError }) {
 
         <div className="comments-toolbar">
           <div className="search-input-wrapper">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8896A6" strokeWidth="2">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
               <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
             </svg>
             <input 
@@ -596,17 +1139,17 @@ function Comments({ user, onError }) {
           </button>
         </div>
 
-        <form className="question-box" onSubmit={publish}>
+        <form className="question-box" onSubmit={requestPublish}>
           <h3>Poser une question</h3>
           <textarea 
             value={question} 
             onChange={e => setQuestion(e.target.value)} 
             placeholder="Écrivez votre question ou commentaire..." 
-            rows="4"
+            rows="3"
           />
           <div className="question-actions">
             <button type="button" className="attach-btn" title="Joindre un fichier">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
               </svg>
             </button>
@@ -616,20 +1159,24 @@ function Comments({ user, onError }) {
 
         <section className="discussions-list">
           {displayList.map(item => {
-            const authorName = item.author ? item.author.prenom : (item.envoyeur?.prenom || 'Utilisateur')
+            const authorName = item.author ? item.author.prenom : (item.envoyeur?.prenom || 'Vous')
             const authorRole = item.author ? item.author.role : 'Étudiant'
-            const initials = item.author?.initials || authorName[0]
+            const initials = item.author?.initials || (authorName[0] || 'F')
             const timeText = item.date || relativeDate(item.dateDePublication)
             const replies = item.replies || []
+            const isProf = item.author?.isProf
+            const isOther = item.author?.isOther
 
             return (
               <article className="discussion-card" key={item.id}>
                 <div className="discussion-author">
-                  <span className="discussion-avatar">{initials}</span>
+                  <span className={`discussion-avatar ${isProf ? 'prof-avatar' : isOther ? 'other-avatar' : ''}`}>
+                    {initials}
+                  </span>
                   <div className="author-details">
                     <div className="author-title">
                       <strong>{authorName}</strong>
-                      <span className="role-badge">{authorRole}</span>
+                      <span className={`role-badge ${isProf ? 'prof-badge' : ''}`}>{authorRole}</span>
                     </div>
                     <small className="time-ago">{timeText}</small>
                   </div>
@@ -668,36 +1215,439 @@ function Comments({ user, onError }) {
         </section>
       </main>
       <Footer/>
+
+      {confirmOpen && (
+        <ConfirmPublishModal
+          busy={publishing}
+          onConfirm={confirmPublish}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      )}
     </>
   ) 
 }
 
-function Account({ user, close, logout }) { 
+function Account({ user, close, logout, onEdit }) { 
+  const [showManageMenu, setShowManageMenu] = useState(false)
+  const fullName = user ? `${user.prenom || ''} ${user.nom || ''}`.trim() : 'Faly Hasiniaina RAKOTOSOA'
+  const email = user?.email || 'hasinarakoko@gmail.com'
+  const initial = user?.prenom?.[0] || 'F'
+
   return (
     <div className="modal-backdrop" onClick={close}>
       <section className="account-modal" onClick={e => e.stopPropagation()}>
-        <button className="close-button" onClick={close}>×</button>
-        <div className="account-card">
-          <Avatar user={user}/>
-          <div>
-            <h2>{user?.prenom} {user?.nom}</h2>
-            <p>{user?.email}</p>
+        <button className="close-button" onClick={close} aria-label="Fermer">×</button>
+        
+        <div className="account-user-card">
+          <div className="account-user-avatar">{initial}</div>
+          <div className="account-user-info">
+            <span className="account-user-name">{fullName}</span>
+            <span className="account-user-email">{email}</span>
           </div>
         </div>
-        <button className="logout-button" onClick={logout}>↪ Se déconnecter</button>
+
+        <div className="account-manage-wrapper">
+          <button 
+            type="button" 
+            className="account-manage-row" 
+            onClick={() => setShowManageMenu(prev => !prev)}
+          >
+            <Logo className="account-manage-logo" />
+            <span>Gérer votre compte</span>
+            <span style={{ fontSize: '12px', marginLeft: 'auto', transform: showManageMenu ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }}>⌄</span>
+          </button>
+
+          {showManageMenu && (
+            <div className="manage-account-dropdown" onClick={e => e.stopPropagation()}>
+              <button type="button" className="dropdown-item" onClick={() => onEdit('edit-profile')}>
+                Modifier vos informations<br />personnelles
+              </button>
+              <div className="dropdown-divider"></div>
+              <button type="button" className="dropdown-item" onClick={() => onEdit('edit-email')}>
+                Changer d’email
+              </button>
+              <div className="dropdown-divider"></div>
+              <button type="button" className="dropdown-item" onClick={() => onEdit('edit-password')}>
+                Changer votre mot de passe
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="account-divider"></div>
+
+        <button className="logout-button-red" onClick={logout}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+          </svg>
+          <span>Se déconnecter</span>
+        </button>
       </section>
     </div>
   ) 
 }
 
-function ErrorModal({ message, close }) { 
+const SUCCESS_CONTENT = {
+  login: {
+    title: 'Connexion réussie',
+    text: 'Vous pouvez passer à l’étape suivante',
+    button: 'Ok'
+  },
+  register: {
+    title: 'Inscription terminée',
+    text: 'Merci d’être inscrit à Ne-laiko',
+    button: 'Continuer'
+  },
+  logout: {
+    title: 'Déconnexion réussie',
+    text: 'Vous avez été déconnecté avec succès. À bientôt !',
+    button: 'Ok'
+  },
+  publish: {
+    title: 'Commentaire publié',
+    text: 'Votre commentaire a bien été publié et est désormais visible par les autres utilisateurs.',
+    button: 'D’accord'
+  },
+  update: {
+    title: 'Modification réussie',
+    text: 'Vous pouvez maintenant retourner où vous en êtes actuellement',
+    button: 'D’accord'
+  }
+}
+
+function SuccessModal({ mode, onConfirm }) {
+  const content = SUCCESS_CONTENT[mode] || SUCCESS_CONTENT.login
   return (
     <div className="modal-backdrop">
-      <section className="error-modal">
+      <div className="validation-dialog">
+        <div className="status-circle success-circle">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+        <h2>{content.title}</h2>
+        <p>{content.text}</p>
+        <button className="dialog-btn success-btn" onClick={onConfirm}>
+          {content.button}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function ConfirmPublishModal({ busy, onConfirm, onCancel }) {
+  return (
+    <div className="modal-backdrop" onClick={busy ? undefined : onCancel}>
+      <div
+        className="validation-dialog confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        onClick={e => e.stopPropagation()}
+      >
+        <button type="button" className="close-button" onClick={onCancel} disabled={busy} aria-label="Fermer">×</button>
+        <h2>Confirmation de publication</h2>
+        <p>Voulez-vous vraiment publier<br />ce commentaire ?</p>
+        <div className="dialog-actions">
+          <button type="button" className="dialog-btn secondary-btn" onClick={onConfirm} disabled={busy}>Oui</button>
+          <button type="button" className="dialog-btn" onClick={onCancel} disabled={busy}>Non</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const EDIT_CONFIG = {
+  email: {
+    title: 'Changement d’email',
+    subtitle: 'Changer votre adresse email pour continuer.',
+    submit: 'Procéder à la modification',
+    confirm: true
+  },
+  profile: {
+    title: 'Modifier les informations du compte',
+    subtitle: 'Changer ou non vos informations personnelles.',
+    submit: 'Procéder à la modification',
+    confirm: true
+  },
+  password: {
+    title: 'Modification du mot de passe',
+    subtitle: 'Changer votre mot de passe pour continuer.',
+    submit: 'Procéder',
+    confirm: false
+  }
+}
+
+function PasswordField({ id, name, value, onChange, autoComplete, autoFocus }) {
+  const [visible, setVisible] = useState(false)
+  return (
+    <div className="password-field">
+      <input
+        id={id}
+        name={name}
+        type={visible ? 'text' : 'password'}
+        placeholder="**********"
+        value={value}
+        onChange={onChange}
+        autoComplete={autoComplete}
+        autoFocus={autoFocus}
+        required
+      />
+      <button
+        type="button"
+        className="eye-toggle"
+        onClick={() => setVisible(v => !v)}
+        aria-label="Afficher ou masquer le mot de passe"
+      >
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.8">
+          {visible ? (
+            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" />
+          ) : (
+            <>
+              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+              <circle cx="12" cy="12" r="3"/>
+            </>
+          )}
+        </svg>
+      </button>
+    </div>
+  )
+}
+
+function ConfirmPasswordModal({ busy, onConfirm, onCancel }) {
+  const [password, setPassword] = useState('')
+
+  function submit(e) {
+    e.preventDefault()
+    if (busy || !password) return
+    onConfirm(password)
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={busy ? undefined : onCancel}>
+      <form
+        className="validation-dialog confirm-dialog confirm-password-dialog"
+        role="dialog"
+        aria-modal="true"
+        onClick={e => e.stopPropagation()}
+        onSubmit={submit}
+      >
+        <button type="button" className="close-button" onClick={onCancel} disabled={busy} aria-label="Fermer">×</button>
+        <h2>Confirmation de modification</h2>
+        <p>Saisissez votre mot de passe pour confirmer</p>
+        <div className="input-group">
+          <label htmlFor="confirm-password">Mot de passe</label>
+          <PasswordField
+            id="confirm-password"
+            name="confirmPassword"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            autoComplete="current-password"
+            autoFocus
+          />
+        </div>
+        <div className="dialog-actions dialog-actions-end">
+          <button type="button" className="dialog-btn secondary-btn" onClick={onCancel} disabled={busy}>Annuler</button>
+          <button type="submit" className="dialog-btn" disabled={busy || !password}>Modifier</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+// Pages de modification du compte : mode = 'email' | 'profile' | 'password'
+function EditAccount({ mode, user, onSuccess, onError, onCancel }) {
+  const config = EDIT_CONFIG[mode]
+  const [form, setForm] = useState({ nom: '', prenom: '', email: '', nouveauMotDePasse: '', confirmation: '' })
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const update = e => setForm({ ...form, [e.target.name]: e.target.value })
+
+  function validate() {
+    if (mode === 'email') {
+      const email = form.email.trim()
+      if (!email) return 'Saisissez votre nouvelle adresse email.'
+      if (email.toLowerCase() === (user?.email || '').toLowerCase()) {
+        return 'Cette adresse est déjà votre adresse email actuelle.'
+      }
+    }
+    if (mode === 'profile' && !form.nom.trim() && !form.prenom.trim()) {
+      return 'Renseignez au moins un champ à modifier.'
+    }
+    if (mode === 'password') {
+      if (form.nouveauMotDePasse !== form.confirmation) return 'Les mots de passe ne correspondent pas.'
+      if (form.nouveauMotDePasse.length < 8) return 'Le nouveau mot de passe doit contenir au moins 8 caractères.'
+    }
+    return ''
+  }
+
+  // 1) "Procéder" : validation locale, puis confirmation (email / infos) ou appel direct (mot de passe)
+  function submit(e) {
+    e.preventDefault()
+    onError('')
+    const problem = validate()
+    if (problem) return onError(problem)
+    if (config.confirm) setConfirmOpen(true)
+    else run()
+  }
+
+  // 2) Appel back, puis dialogue de succès (ou d'échec)
+  async function run(confirmationPassword) {
+    setBusy(true)
+    const changes =
+      mode === 'email' ? { email: form.email.trim().toLowerCase() }
+      : mode === 'profile' ? { nom: form.nom.trim() || user?.nom, prenom: form.prenom.trim() || user?.prenom }
+      : {}
+    try {
+      let result
+      if (mode === 'email') {
+        result = await api.account.updateEmail({ user, ...changes, currentPassword: confirmationPassword })
+      } else if (mode === 'profile') {
+        result = await api.account.updateProfile({ user, ...changes, currentPassword: confirmationPassword })
+      } else {
+        result = await api.account.updatePassword({ user, newPassword: form.nouveauMotDePasse })
+      }
+      // Le backend renvoie l'utilisateur mis à jour (profil, email) ou 204 sans corps (mot de passe)
+      const updated = result?.utilisateur || result?.user || (result?.email ? result : {})
+      setConfirmOpen(false)
+      onSuccess({ ...user, ...changes, ...updated })
+    } catch (e) {
+      setConfirmOpen(false)
+      onError(e.message || 'Une erreur est survenue.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <main className="auth-page">
+        <section className="auth-visual">
+          <div className="auth-visual-overlay"></div>
+          <div className="auth-visual-content">
+            <div className="logo-circle">
+              <Logo className="auth-logo" />
+            </div>
+            <h1>Amusez-vous</h1>
+            <p>Accédez vos cours, demandez de l'aide au professeur ou via l'assistant IA et entraînez-vous sur notre plateforme d'apprentissage Ne-laiko.</p>
+          </div>
+        </section>
+
+        <section className="auth-form-container">
+          <div className="auth-form-wrapper">
+            <h1>{config.title}</h1>
+            <p className="auth-subtitle">{config.subtitle}</p>
+
+            <form onSubmit={submit} className="auth-form">
+              {mode === 'email' && (
+                <div className="input-group">
+                  <label htmlFor="email">Email</label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    placeholder={user?.email || 'xxxxx@example.com'}
+                    value={form.email}
+                    onChange={update}
+                    required
+                    autoFocus
+                  />
+                </div>
+              )}
+
+              {mode === 'profile' && (
+                <>
+                  <div className="input-group">
+                    <label htmlFor="nom">Nom</label>
+                    <input
+                      id="nom"
+                      name="nom"
+                      placeholder={user?.nom || 'Rakotosoa'}
+                      value={form.nom}
+                      onChange={update}
+                      autoFocus
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label htmlFor="prenom">Prénoms</label>
+                    <input
+                      id="prenom"
+                      name="prenom"
+                      placeholder={user?.prenom || 'Faly Hasy'}
+                      value={form.prenom}
+                      onChange={update}
+                    />
+                  </div>
+                </>
+              )}
+
+              {mode === 'password' && (
+                <>
+                  <div className="input-group">
+                    <label htmlFor="nouveauMotDePasse">Nouveau mot de passe</label>
+                    <PasswordField
+                      id="nouveauMotDePasse"
+                      name="nouveauMotDePasse"
+                      value={form.nouveauMotDePasse}
+                      onChange={update}
+                      autoComplete="new-password"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="input-group">
+                    <label htmlFor="confirmation">Confirmer votre nouveau mot de passe</label>
+                    <PasswordField
+                      id="confirmation"
+                      name="confirmation"
+                      value={form.confirmation}
+                      onChange={update}
+                      autoComplete="new-password"
+                    />
+                  </div>
+                </>
+              )}
+
+              <button type="submit" className="auth-submit-btn" disabled={busy}>
+                {busy && !confirmOpen ? 'Chargement...' : config.submit}
+              </button>
+            </form>
+
+            <p className="auth-switch">
+              <button type="button" className="inline-link" onClick={onCancel}>Retour</button>
+            </p>
+          </div>
+        </section>
+      </main>
+
+      {confirmOpen && (
+        <ConfirmPasswordModal
+          busy={busy}
+          onConfirm={run}
+          onCancel={() => setConfirmOpen(false)}
+        />
+      )}
+    </>
+  )
+}
+
+function ErrorModal({ message, close }) { 
+  return (
+    <div className="modal-backdrop" onClick={close}>
+      <div className="validation-dialog" onClick={e => e.stopPropagation()}>
+        <div className="status-circle error-circle">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </div>
         <h2>Une erreur est survenue</h2>
         <p>{message}</p>
-        <button className="primary-button" onClick={close}>Fermer</button>
-      </section>
+        <button className="dialog-btn error-btn" onClick={close}>
+          Fermer
+        </button>
+      </div>
     </div>
   ) 
 }
@@ -707,8 +1657,11 @@ export default function App() {
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('user')) } catch { return null }
   })
+  const [pendingUser, setPendingUser] = useState(null)
+  const [successDialogMode, setSuccessDialogMode] = useState(null)
   const [menu, setMenu] = useState(false)
   const [account, setAccount] = useState(false)
+  const [returnTo, setReturnTo] = useState('study')
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -718,51 +1671,110 @@ export default function App() {
   }, [])
 
   function navigate(next) {
-    const path = next === 'home' ? `${BASE}/` 
-      : next === 'login' ? `${BASE}/login`
-      : next === 'register' ? `${BASE}/register`
-      : next === 'comments' ? `${BASE}/study/comments`
-      : `${BASE}/study`
+    const path = ROUTES[next] || ROUTES.study
     history.pushState({}, '', path)
     setScreen(next)
     setMenu(false)
   }
 
-  function success(next) {
-    setUser(next)
-    localStorage.setItem('user', JSON.stringify(next))
-    navigate('study')
+  function handleAuthSuccess(userData, mode) {
+    setPendingUser(userData)
+    setSuccessDialogMode(mode)
   }
 
+  function confirmSuccessDialog() {
+    const mode = successDialogMode
+    setSuccessDialogMode(null)
+
+    if (mode === 'logout') return navigate('home')
+    if (mode === 'publish') return
+    if (mode === 'update') return navigate(returnTo)
+
+    if (pendingUser) {
+      setUser(pendingUser)
+      localStorage.setItem('user', JSON.stringify(pendingUser))
+    }
+    setPendingUser(null)
+    navigate(isAdmin(pendingUser) ? 'moderation' : 'study')
+  }
+
+  // Ouvre une page de modification du compte en mémorisant l'écran d'origine
+  function openAccountEdit(next) {
+    setReturnTo(screen)
+    setAccount(false)
+    navigate(next)
+  }
+
+  // Modification enregistrée : on met à jour la session, puis on affiche la validation
+  function handleAccountUpdated(updatedUser) {
+    const { motDePasse, ...sessionUser } = updatedUser // jamais de mot de passe dans la session
+    setUser(sessionUser)
+    localStorage.setItem('user', JSON.stringify(sessionUser))
+    setSuccessDialogMode('update')
+  }
+
+  // La session est fermée tout de suite, la validation s'affiche ensuite (Ok -> accueil)
   function logout() {
     setUser(null)
     localStorage.removeItem('user')
     setAccount(false)
-    navigate('home')
+    setSuccessDialogMode('logout')
   }
+
+  const isEditScreen = EDIT_SCREENS.includes(screen)
+  const isModerationScreen = MODERATION_SCREENS.includes(screen)
+  const showHeader = screen !== 'login' && screen !== 'register' && !isEditScreen
+
+  // Pages protégées : connexion requise (modification du compte, modération), rôle admin pour la modération.
+  // Aucune redirection pendant la validation de déconnexion (« Ok » ramène à l'accueil).
+  useEffect(() => {
+    if (successDialogMode === 'logout') return
+    if ((isEditScreen || isModerationScreen) && !user) navigate('login')
+    else if (isModerationScreen && !isAdmin(user)) navigate('study')
+  }, [screen, user, successDialogMode])
 
   return (
     <div className="app">
-      <Header 
-        user={user} 
-        navigate={navigate} 
-        onMenu={() => setMenu(true)} 
-        onAccount={() => setAccount(true)} 
-        screen={screen}
-      />
+      {showHeader && (
+        <Header 
+          user={user} 
+          navigate={navigate} 
+          onMenu={() => setMenu(m => !m)} 
+          onAccount={() => setAccount(true)} 
+          screen={screen}
+        />
+      )}
       <Menu 
         open={menu} 
         close={() => setMenu(false)} 
         navigate={navigate}
+        admin={isAdmin(user)}
       />
       
       {screen === 'home' && <Home navigate={navigate}/>} 
-      {screen === 'login' && <Auth mode="login" navigate={navigate} onSuccess={success} onError={setError}/>} 
-      {screen === 'register' && <Auth mode="register" navigate={navigate} onSuccess={success} onError={setError}/>} 
+      {screen === 'login' && <Auth mode="login" navigate={navigate} onSuccess={handleAuthSuccess} onError={setError}/>} 
+      {screen === 'register' && <Auth mode="register" navigate={navigate} onSuccess={handleAuthSuccess} onError={setError}/>} 
       {screen === 'study' && <Study navigate={navigate}/>} 
-      {screen === 'comments' && <Comments user={user} onError={setError}/>} 
+      {isEditScreen && user && (
+        <EditAccount
+          key={screen}
+          mode={screen.replace('edit-', '')}
+          user={user}
+          onSuccess={handleAccountUpdated}
+          onError={setError}
+          onCancel={() => navigate(returnTo)}
+        />
+      )}
+      {screen === 'moderation' && isAdmin(user) && <Moderation navigate={navigate}/>}
+      {isModerationScreen && screen !== 'moderation' && isAdmin(user) && (
+        <ModerationList key={screen} kind={screen.replace('moderation-', '')} onError={setError}/>
+      )}
+      {screen === 'comments' && <Comments user={user} onError={setError} onPublished={() => setSuccessDialogMode('publish')}/>} 
       
-      {account && <Account user={user} close={() => setAccount(false)} logout={logout}/>} 
+      {successDialogMode && (
+        <SuccessModal mode={successDialogMode} onConfirm={confirmSuccessDialog} />
+      )}
+      {account && <Account user={user} close={() => setAccount(false)} logout={logout} onEdit={openAccountEdit}/>} 
       {error && <ErrorModal message={error} close={() => setError('')}/>}
     </div>
   ) 
