@@ -11,7 +11,7 @@ background-color: #FFFFFF;
 --border-light: #E2E8F0;
 --text-muted: #64748B;
 }
-{
+*, ::before, ::after {
 box-sizing: border-box;
 }
 body {
