@@ -44,13 +44,43 @@ function Home({ navigate }) {
   return <><section className="welcome-hero"><div className="hero-content"><Logo /><h1>Bienvenue sur Ne-laiko</h1><p>La clé de votre réussite<br/>universitaire avant tout</p><button className="primary-button" onClick={() => navigate('login')}>Commencer</button></div></section><Footer/></>
 }
 
-function Footer() { return <footer><Logo/><div><strong>Cas d'utilisation</strong><span>Apprentissage</span><span>Compréhension des sujets</span><span>Allègement des enseignements</span><span>Plus sur la pratique</span></div><div><strong>Explorations</strong><span>Methodologies d’apprentissage</span><span>Cours, cursus</span></div><div><strong>Ressources</strong><span>Assistant IA</span><span>Forum étudiants-professeurs</span><span>Aide</span></div></footer> }
+function Footer() { 
+  return <footer>
+    <div className="footer-logo-section">
+      <Logo/>
+      <div className="contact-icons">
+        <span className="contact-icon">📞</span>
+        <span className="contact-icon">✉️</span>
+      </div>
+    </div>
+    <div>
+      <strong>Cas d'utilisation</strong>
+      <span>Apprentissage</span>
+      <span>Compréhension des sujets</span>
+      <span>Allègement des enseignements</span>
+      <span>Plus sur la pratique</span>
+    </div>
+    <div>
+      <strong>Explorations</strong>
+      <span>Méthodologies d’apprentissage</span>
+      <span>Cours, cursus</span>
+    </div>
+    <div>
+      <strong>Ressources</strong>
+      <span>Assistant IA</span>
+      <span>Forum étudiants-professeurs</span>
+      <span>Plateforme d'examen en ligne</span>
+      <span>Plateforme d'étude en ligne</span>
+      <span>Aide</span>
+    </div>
+  </footer> 
+}
 
 function Auth({ mode, navigate, onSuccess, onError }) {
-  const register = mode === 'register'; const [form, setForm] = useState(register ? emptyRegistration : { email: '', motDePasse: '' }); const [busy, setBusy] = useState(false)
-  const update = e => setForm({ ...form, [e.target.name]: e.target.value })
+  const register = mode === 'register'; const [form, setForm] = useState(register ? { ...emptyRegistration, etudiant: true } : { email: '', motDePasse: '', etudiant: true }); const [busy, setBusy] = useState(false)
+  const update = e => setForm({ ...form, [e.target.name]: e.target.type === 'checkbox' ? e.target.checked : e.target.value })
   async function submit(e) { e.preventDefault(); setBusy(true); onError(''); try { const result = register ? await api.auth.register({ matricule: form.matricule, nom: form.nom, prenom: form.prenom, email: form.email, motDePasse: form.motDePasse, role: form.etudiant ? 'ETUDIANT' : 'PROF' }) : await api.auth.login({ email: form.email, motDePasse: form.motDePasse }); onSuccess(result?.utilisateur || result) } catch (error) { onError(`${register ? 'Inscription' : 'Connexion'} impossible : ${error.message}`) } finally { setBusy(false) } }
-  return <main className="auth-page"><section className="auth-visual"><Logo/><h1>{register ? 'Rejoignez-nous' : <>Commencez<br/>l’aventure</>}</h1></section><section className="auth-form"><h1>{register ? 'Créer un compte' : 'Se connecter à votre compte'}</h1><p>Remplissez vos informations pour continuer.</p><form onSubmit={submit}>{register && <><label>Matricule<input name="matricule" value={form.matricule} onChange={update} maxLength="10" required/></label><div className="form-grid"><label>Nom<input name="nom" value={form.nom} onChange={update} required/></label><label>Prénom<input name="prenom" value={form.prenom} onChange={update} required/></label></div></>}<label>Email<input name="email" type="email" value={form.email} onChange={update} required/></label><label>Mot de passe<input name="motDePasse" type="password" minLength="8" value={form.motDePasse} onChange={update} required/></label>{register && <label className="check-row"><input type="checkbox" name="etudiant" checked={form.etudiant} onChange={e => setForm({ ...form, etudiant: e.target.checked })}/><span>Étudiant</span></label>}<button className="primary-button" disabled={busy}>{busy ? 'Chargement...' : register ? 'Créer le compte' : 'Se connecter'}</button></form><button className="switch-button" onClick={() => navigate(register ? 'login' : 'register')}>{register ? 'J’ai déjà un compte' : 'Créer un compte'}</button></section></main>
+  return <main className="auth-page"><section className="auth-visual"><Logo/><h1>{register ? 'Rejoignez-nous' : <>Commencez<br/>l'aventure</>}</h1><p>Grace à Ne-laiko, vos soucis sur l'accessibilité et la comprehension des études sont épargnez.</p></section><section className="auth-form"><h1>{register ? 'Créer un compte' : 'Se connecter à votre compte'}</h1><p>Remplissez vos informations pour continuer.</p><form onSubmit={submit}>{register && <><label>Matricule<input name="matricule" value={form.matricule} onChange={update} maxLength="10" required/></label><div className="form-grid"><label>Nom<input name="nom" value={form.nom} onChange={update} required/></label><label>Prénom<input name="prenom" value={form.prenom} onChange={update} required/></label></div></>}<label>Email<input name="email" type="email" value={form.email} onChange={update} required/></label><label>Mot de passe<input name="motDePasse" type="password" minLength="8" value={form.motDePasse} onChange={update} required/></label>{!register && <a className="forgot-password">Avez-vous oublié votre mot de passe?</a>}<label className="check-row"><input type="checkbox" name="etudiant" checked={form.etudiant} onChange={update}/><span>Vous êtes étudiant</span></label><button className="primary-button" disabled={busy}>{busy ? 'Chargement...' : 'Se connecter'}</button></form>{!register && <p className="switch-text">Vous n'avez pas encore de compte, <button className="link-button" onClick={() => navigate('register')}>cliquez ici</button></p>}</section></main>
 }
 
 function Study({ navigate }) { const cards = [['☷','Méthodologie','Suivez votre progression étape par étape.'],['◯','Assistant IA',"Posez vos questions à l'assistant intelligent."],['◯','Commentaires','Échangez avec étudiants et professeurs.'],['◯','Révision','Repassez un examen pour voir où vous en êtes actuellement.']]; return <><main className="study-space"><h1>Espace d'étude</h1><p>Analyse 2 - Répétition espacée</p><section className="study-grid">{cards.map(([icon,title,text]) => <button className="study-card" key={title} onClick={() => title === 'Commentaires' && navigate('comments')}><span className="study-icon">{icon}</span><h2>{title}</h2><span>{text}</span></button>)}</section></main><Footer/></> }
