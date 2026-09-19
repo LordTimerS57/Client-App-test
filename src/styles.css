@@ -1297,6 +1297,50 @@ font-size: 13px;
 color: #6b7280;
 }
 
+.reply-trigger {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--primary-color);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.reply-trigger:hover {
+  text-decoration: underline;
+}
+
+.reply-form {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reply-form textarea {
+  width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  font-size: 13.5px;
+  resize: vertical;
+  outline: none;
+  background-color: #f9fafb;
+  color: var(--text-primary);
+}
+
+.reply-form textarea:focus {
+  border-color: var(--text-muted);
+  background-color: #ffffff;
+}
+
+.reply-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Pages de modération : recherche, filtre par rôle et accordéon */
 .mod-content {
 max-width: 860px;

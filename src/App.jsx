@@ -863,12 +863,36 @@ function UserRow({ id, user, open, onToggle }) {
   )
 }
 
+function ReplyThread({ replies }) {
+  if (!replies || replies.length === 0) return null
+  return (
+    <div className="replies-container">
+      {replies.map((reply, index) => {
+        const replyAuthor = reply.author || reply.envoyeur || {}
+        const children = reply.replies || reply.messagesReponses || []
+        return (
+          <div className="reply-card" key={reply.id ?? index}>
+            <div className="author-title">
+              <strong>{replyAuthor.prenom || 'Utilisateur'}</strong>
+              <span className={`role-badge ${isStaffRole(replyAuthor.role) ? 'prof-badge' : ''}`}>
+                {roleLabel(replyAuthor.role)}
+              </span>
+            </div>
+            <p className="reply-content">{reply.content || reply.contenu}</p>
+            <ReplyThread replies={children} />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function CommentRow({ id, item, open, onToggle }) {
   const author = commentAuthor(item)
   const name = author.prenom || 'Utilisateur'
   const content = item.contenu || item.content || ''
   const reports = reportCount(item)
-  const allReplies = item.replies || []
+  const allReplies = item.replies || item.messagesReponses || []   
   const replies = allReplies.filter(reply => reply && typeof reply === 'object')
   const repliesCount = item.repliesCount ?? allReplies.length
   const published = new Date(item.dateDePublication)
@@ -898,22 +922,7 @@ function CommentRow({ id, item, open, onToggle }) {
       <p className="accordion-meta">
         {[author.matricule && `Matricule ${author.matricule}`, fullDate].filter(Boolean).join(' · ')}
       </p>
-      {replies.length > 0 && (
-        <div className="replies-container">
-          {replies.map((reply, index) => {
-            const replyAuthor = reply.author || reply.envoyeur || {}
-            return (
-              <div className="reply-card" key={reply.id ?? index}>
-                <div className="author-title">
-                  <strong>{replyAuthor.prenom || 'Utilisateur'}</strong>
-                  <span className={`role-badge ${isStaffRole(replyAuthor.role) ? 'prof-badge' : ''}`}>{roleLabel(replyAuthor.role)}</span>
-                </div>
-                <p className="reply-content">{reply.content || reply.contenu}</p>
-              </div>
-            )
-          })}
-        </div>
-      )}
+      <ReplyThread replies={replies} />
     </AccordionItem>
   )
 }
@@ -1034,6 +1043,87 @@ function ModerationList({ kind, onError }) {
   )
 }
 
+function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting }) {
+  const author = item.author ? item.author : (item.envoyeur || {})
+  const authorName = item.author ? item.author.prenom : (author.prenom || 'Vous')
+  const authorRole = item.author ? item.author.role : roleLabel(author.role)
+  const initials = item.author?.initials || (authorName[0] || 'F')
+  const isProf = item.author?.isProf || isStaffRole(author.role)
+  const isOther = item.author?.isOther
+  const timeText = item.date || relativeDate(item.dateDePublication)
+  const children = item.replies || item.messagesReponses || []
+  const canReply = user && isRealData
+  const isReplying = replyingId === item.id
+
+  return (
+    <div className={depth > 0 ? 'reply-card' : 'discussion-card'}>
+      <div className="discussion-author">
+        <span className={`discussion-avatar ${isProf ? 'prof-avatar' : isOther ? 'other-avatar' : ''}`}>
+          {initials}
+        </span>
+        <div className="author-details">
+          <div className="author-title">
+            <strong>{authorName}</strong>
+            <span className={`role-badge ${isProf ? 'prof-badge' : ''}`}>{authorRole}</span>
+          </div>
+          <small className="time-ago">{timeText}</small>
+        </div>
+      </div>
+
+      <p className={depth > 0 ? 'reply-content' : 'discussion-content'}>
+        {item.contenu || item.content}
+      </p>
+
+      <div className="discussion-footer">
+        {depth === 0 && (
+          <span className="replies-count">{item.repliesCount ?? children.length} réponses</span>
+        )}
+        {canReply && (
+          <button type="button" className="reply-trigger" onClick={() => onToggleReply(isReplying ? null : item.id)}>
+            Répondre
+          </button>
+        )}
+      </div>
+
+      {isReplying && (
+        <form className="reply-form" onSubmit={e => { e.preventDefault(); onSubmitReply(item.id) }}>
+          <textarea
+            value={replyText}
+            onChange={e => setReplyText(e.target.value)}
+            placeholder="Écrivez votre réponse..."
+            rows="2"
+            autoFocus
+          />
+          <div className="reply-form-actions">
+            <button type="button" className="dialog-btn secondary-btn" onClick={() => onToggleReply(null)}>Annuler</button>
+            <button type="submit" className="dialog-btn" disabled={submitting || !replyText.trim()}>Répondre</button>
+          </div>
+        </form>
+      )}
+
+      {children.length > 0 && (
+        <div className="replies-container">
+          {children.map((child, index) => (
+            <MessageThread
+              key={child.id ?? index}
+              item={child}
+              depth={depth + 1}
+              user={user}
+              isRealData={isRealData}
+              replyingId={replyingId}
+              replyText={replyText}
+              setReplyText={setReplyText}
+              onToggleReply={onToggleReply}
+              onSubmitReply={onSubmitReply}
+              submitting={submitting}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Comments({ user, onError, onPublished }) { 
   const [messages, setMessages] = useState([])
   const [search, setSearch] = useState('')
@@ -1041,6 +1131,9 @@ function Comments({ user, onError, onPublished }) {
   const [tick, setTick] = useState(0)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishing, setPublishing] = useState(false)
+  const [replyingId, setReplyingId] = useState(null)
+  const [replyTest, setReplyText] = useState('')
+  const [replySubmitting, setReplySubmitting] = useState(false)
 
   useEffect(() => { 
     api.messages.list({ q: search })
@@ -1053,7 +1146,31 @@ function Comments({ user, onError, onPublished }) {
     return () => clearInterval(t) 
   }, [])
 
-  // 1) Clic sur "Publier" : simple validation du formulaire, on ouvre la confirmation (aucun appel back)
+  function toggleReply(id) {
+    setReplyingId(id)
+    setReplyText('')
+  }
+
+  async function submitReply(parentId) {
+    if (!replyText.trim()) return
+    setReplySubmitting(true)
+    try {
+      await api.messages.create({
+        objet: 'Réponse',
+        contenu: replyText.trim(),
+        envoyeur: { prenom: user.prenom || 'Vous', matricule: user.matricule },
+        messageParent: { id: parentId }
+      })
+      setReplyingId(null)
+      setReplyText('')
+      setTick(v => v + 1)
+    } catch (e) {
+      onError(e.message)
+    } finally {
+      setReplySubmitting(false)
+    }
+  }
+
   function requestPublish(e) {
     e.preventDefault()
     if (!user) return onError('Connectez-vous pour publier.')
@@ -1061,7 +1178,6 @@ function Comments({ user, onError, onPublished }) {
     setConfirmOpen(true)
   }
 
-  // 2) Clic sur "Oui" : appel back, puis ouverture du dialogue de validation
   async function confirmPublish() {
     setPublishing(true)
     try {
@@ -1109,6 +1225,7 @@ function Comments({ user, onError, onPublished }) {
   ]
 
   const displayList = messages.length > 0 ? messages : defaultDiscussions
+  const isRealData = messages.length > 0  
 
   return (
     <>
@@ -1158,60 +1275,21 @@ function Comments({ user, onError, onPublished }) {
         </form>
 
         <section className="discussions-list">
-          {displayList.map(item => {
-            const authorName = item.author ? item.author.prenom : (item.envoyeur?.prenom || 'Vous')
-            const authorRole = item.author ? item.author.role : 'Étudiant'
-            const initials = item.author?.initials || (authorName[0] || 'F')
-            const timeText = item.date || relativeDate(item.dateDePublication)
-            const replies = item.replies || []
-            const isProf = item.author?.isProf
-            const isOther = item.author?.isOther
-
-            return (
-              <article className="discussion-card" key={item.id}>
-                <div className="discussion-author">
-                  <span className={`discussion-avatar ${isProf ? 'prof-avatar' : isOther ? 'other-avatar' : ''}`}>
-                    {initials}
-                  </span>
-                  <div className="author-details">
-                    <div className="author-title">
-                      <strong>{authorName}</strong>
-                      <span className={`role-badge ${isProf ? 'prof-badge' : ''}`}>{authorRole}</span>
-                    </div>
-                    <small className="time-ago">{timeText}</small>
-                  </div>
-                </div>
-
-                <p className="discussion-content">{item.contenu || item.content}</p>
-
-                {replies.length > 0 && (
-                  <div className="replies-container">
-                    {replies.map(reply => (
-                      <div className="reply-card" key={reply.id}>
-                        <div className="discussion-author">
-                          <span className="discussion-avatar prof-avatar">{reply.author.initials}</span>
-                          <div className="author-details">
-                            <div className="author-title">
-                              <strong>{reply.author.prenom}</strong>
-                              <span className="role-badge prof-badge">{reply.author.role}</span>
-                            </div>
-                            <small className="time-ago">{reply.date}</small>
-                          </div>
-                        </div>
-                        <p className="reply-content">{reply.content}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="discussion-footer">
-                  <span className="replies-count">
-                    {item.repliesCount ?? replies.length} réponses
-                  </span>
-                </div>
-              </article>
-            )
-          })}
+          {displayList.map(item => (
+            <MessageThread
+              key={item.id}
+              item={item}
+              depth={0}
+              user={user}
+              isRealData={isRealData}
+              replyingId={replyingId}
+              replyText={replyText}
+              setReplyText={setReplyText}
+              onToggleReply={toggleReply}
+              onSubmitReply={submitReply}
+              submitting={replySubmitting}
+            />
+          ))}
         </section>
       </main>
       <Footer/>
