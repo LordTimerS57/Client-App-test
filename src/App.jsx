@@ -970,6 +970,7 @@ function UserRow({ id, user, open, onToggle }) {
         <div><dt>Nom</dt><dd>{user.nom || '—'}</dd></div>
         <div><dt>Matricule</dt><dd>{user.matricule || '—'}</dd></div>
         <div><dt>Email</dt><dd>{user.email || '—'}</dd></div>
+        <div><dt>Connexion</dt><dd>{user.connecte ? 'Connecté' : 'Non connecté'}</dd></div>
       </dl>
     </AccordionItem>
   )
@@ -1085,7 +1086,15 @@ function ModerationList({ kind, onError }) {
   const [role, setRole] = useState('all')
   const [openId, setOpenId] = useState(null)
   const [tick, setTick] = useState(0)
-  useMessagesSocket(() => { if (kind !== 'users') setTick(v => v + 1) }, user?.matricule) 
+
+  // Tout événement WebSocket (message, utilisateur, ou reconnexion "OPEN") recharge les données
+  useMessagesSocket(() => setTick(v => v + 1))
+
+  // Filet de sécurité si un événement est manqué (réseau coupé, etc.)
+  useEffect(() => {
+    const t = setInterval(() => setTick(v => v + 1), 60000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -1106,7 +1115,11 @@ function ModerationList({ kind, onError }) {
               return { ...item, authorRole: author.role || roles[author.matricule] }
             }))
       })
-      .catch(e => { if (alive) { setItems([]); onError(e.message) } })
+      .catch(e => {
+        if (!alive) return
+        setItems(prev => prev ?? []) // en cas d'erreur de rechargement, on garde la liste déjà affichée
+        onError(e.message)
+      })
     return () => { alive = false }
   }, [kind, tick])
 
@@ -1118,7 +1131,7 @@ function ModerationList({ kind, onError }) {
     return terms.every(term => text.includes(term))
   })
   const filtered = terms.length > 0 || role !== 'all'
-  const unit = page.unit[(filtered ? items.length : visible.length) > 1 ? 1 : 0]
+  const unit = page.unit[(filtered ? (items || []).length : visible.length) > 1 ? 1 : 0]
 
   return (
     <>
@@ -1311,7 +1324,7 @@ function Comments({ user, onError, onPublished }) {
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [deleteId, setDeleteId] = useState(null)
   const [deleting, setDeleting] = useState(false)
-  useMessagesSocket(() => setTick(v => v + 1), user?.matricule)
+  useMessagesSocket(event => { if (!event.type?.startsWith('USER_')) setTick(v => v + 1) })
   
   useEffect(() => {
     const t = setInterval(() => setTick(v => v + 1), 300000)
