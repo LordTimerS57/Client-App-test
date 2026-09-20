@@ -115,6 +115,8 @@ function mockUpdateUser(user, changes, { currentPassword, check, verify = true }
   return withoutPassword({ ...user, ...changes })
 }
 
+let mockPasswordChange = null // { code, newPassword }
+
 const api = {
   auth: {
     async login({ email, motDePasse }) {
@@ -137,6 +139,14 @@ const api = {
         return { utilisateur: demoUser }
       }
       throw new Error('Identifiants incorrects')
+    },
+    async logout(user) {
+      if (!externalApi?.auth?.logout || !user?.matricule) return
+      try {
+        await externalApi.auth.logout(user)
+      } catch {
+        /* la session locale est fermée quoi qu'il arrive */
+      }
     },
     async register(data) {
       if (externalApi?.auth?.register) {
@@ -229,15 +239,29 @@ const api = {
       }
       return { utilisateur: mockUpdateUser(user, { email: normalized }, { currentPassword, check }) }
     },
-    async updatePassword({ user, newPassword }) {
-      if (externalApi?.account?.updatePassword) {
-        return callExternal(externalApi.account.updatePassword, { user, newPassword })
+    
+    async requestPasswordChange({ user, newPassword }) {
+      if (externalApi?.account?.requestPasswordChange) {
+        return callExternal(externalApi.account.requestPasswordChange, { user, newPassword })
       }
       if (!newPassword || newPassword.length < 8) {
         throw new Error('Le nouveau mot de passe doit contenir au moins 8 caractères')
       }
-      return { utilisateur: mockUpdateUser(user, { motDePasse: newPassword }, { verify: false }) }
+      mockPasswordChange = { code: String(Math.floor(100000 + Math.random() * 900000)), newPassword }
+      console.info(`[démo] Code de confirmation : ${mockPasswordChange.code}`)
+      return { email: user?.email }
+    },
+    async confirmPasswordChange({ user, code }) {
+      if (externalApi?.account?.confirmPasswordChange) {
+        return callExternal(externalApi.account.confirmPasswordChange, { user, code })
+      }
+      if (!mockPasswordChange || mockPasswordChange.code !== code) throw new Error('Code incorrect')
+      const { newPassword } = mockPasswordChange
+      mockPasswordChange = null
+      return { utilisateur: mockUpdateUser(user, { motDePasse: newPassword }, { verify: false }) 
     }
+}
+
   }
 }
 
@@ -444,14 +468,28 @@ function Footer() {
   )
 }
 
+function EyeIcon({ visible }) {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {visible ? (
+        <>
+          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+          <circle cx="12" cy="12" r="3"/>
+        </>
+      ) : (
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22"/>
+      )}
+    </svg>
+  )
+}
+
 function Auth({ mode, navigate, onSuccess, onError }) {
   const register = mode === 'register'
   const [form, setForm] = useState(
-    register 
-      ? { ...emptyRegistration, etudiant: true } 
-      : { email: '', motDePasse: '', etudiant: true }
+    register
+      ? { ...emptyRegistration, etudiant: true }
+      : { email: '', motDePasse: '' }
   )
-  const [showPassword, setShowPassword] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const update = e => setForm({ 
@@ -572,34 +610,13 @@ function Auth({ mode, navigate, onSuccess, onError }) {
 
             <div className="input-group">
               <label htmlFor="motDePasse">Mot de passe</label>
-              <div className="password-field">
-                <input 
-                  id="motDePasse"
-                  name="motDePasse" 
-                  type={showPassword ? 'text' : 'password'} 
-                  placeholder="**********" 
-                  value={form.motDePasse} 
-                  onChange={update} 
-                  required
-                />
-                <button 
-                  type="button" 
-                  className="eye-toggle" 
-                  onClick={() => setShowPassword(!showPassword)}
-                  aria-label="Afficher ou masquer le mot de passe"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.8">
-                    {showPassword ? (
-                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" />
-                    ) : (
-                      <>
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                        <circle cx="12" cy="12" r="3"/>
-                      </>
-                    )}
-                  </svg>
-                </button>
-              </div>
+              <PasswordField
+                id="motDePasse"
+                name="motDePasse"
+                value={form.motDePasse}
+                onChange={update}
+                autoComplete={register ? 'new-password' : 'current-password'}
+              />
             </div>
 
             {!register && (
@@ -608,19 +625,21 @@ function Auth({ mode, navigate, onSuccess, onError }) {
               </a>
             )}
 
-            <label className="checkbox-row">
-              <input 
-                type="checkbox" 
-                name="etudiant" 
-                checked={form.etudiant} 
-                onChange={update}
-              />
-              <span className="custom-checkbox"></span>
-              <div className="checkbox-text">
-                <strong>Etudiant</strong>
-                <small>Vous êtes étudiant</small>
-              </div>
-            </label>
+            {register && (
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  name="etudiant"
+                  checked={form.etudiant}
+                  onChange={update}
+                />
+                <span className="custom-checkbox"></span>
+                <div className="checkbox-text">
+                  <strong>Etudiant</strong>
+                  <small>Vous êtes étudiant</small>
+                </div>
+              </label>
+            )}
 
             <button type="submit" className="auth-submit-btn" disabled={busy}>
               {busy ? 'Chargement...' : (register ? 'Créer le compte' : 'Se connecter')}
@@ -1368,6 +1387,11 @@ function Account({ user, close, logout, onEdit }) {
 }
 
 const SUCCESS_CONTENT = {
+  emailVerified: {
+    title: 'Email validé',
+    text: 'Votre adresse email a bien été confirmée.',
+    button: 'Continuer'
+  },
   login: {
     title: 'Connexion réussie',
     text: 'Vous pouvez passer à l’étape suivante',
@@ -1459,6 +1483,7 @@ const EDIT_CONFIG = {
 
 function PasswordField({ id, name, value, onChange, autoComplete, autoFocus }) {
   const [visible, setVisible] = useState(false)
+  const label = visible ? 'Masquer le mot de passe' : 'Afficher le mot de passe'
   return (
     <div className="password-field">
       <input
@@ -1476,30 +1501,25 @@ function PasswordField({ id, name, value, onChange, autoComplete, autoFocus }) {
         type="button"
         className="eye-toggle"
         onClick={() => setVisible(v => !v)}
-        aria-label="Afficher ou masquer le mot de passe"
+        aria-label={label}
+        aria-pressed={visible}
+        title={label}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.8">
-          {visible ? (
-            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22" />
-          ) : (
-            <>
-              <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-              <circle cx="12" cy="12" r="3"/>
-            </>
-          )}
-        </svg>
+        <EyeIcon visible={visible} />
       </button>
     </div>
   )
 }
 
-function ConfirmPasswordModal({ busy, onConfirm, onCancel }) {
-  const [password, setPassword] = useState('')
+// Fenêtre de confirmation commune : mot de passe (infos, email) ou code reçu par email (mot de passe)
+function ConfirmSecretModal({ title, text, label, submitLabel = 'Modifier', secret = 'password', busy, onConfirm, onCancel, onResend }) {
+  const [value, setValue] = useState('')
+  const isCode = secret === 'code'
 
   function submit(e) {
     e.preventDefault()
-    if (busy || !password) return
-    onConfirm(password)
+    if (busy || !value) return
+    onConfirm(value)
   }
 
   return (
@@ -1512,22 +1532,42 @@ function ConfirmPasswordModal({ busy, onConfirm, onCancel }) {
         onSubmit={submit}
       >
         <button type="button" className="close-button" onClick={onCancel} disabled={busy} aria-label="Fermer">×</button>
-        <h2>Confirmation de modification</h2>
-        <p>Saisissez votre mot de passe pour confirmer</p>
+        <h2>{title}</h2>
+        <p>{text}</p>
         <div className="input-group">
-          <label htmlFor="confirm-password">Mot de passe</label>
-          <PasswordField
-            id="confirm-password"
-            name="confirmPassword"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            autoComplete="current-password"
-            autoFocus
-          />
+          <label htmlFor="confirm-secret">{label}</label>
+          {isCode ? (
+            <input
+              id="confirm-secret"
+              className="code-input"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder="000000"
+              value={value}
+              onChange={e => setValue(e.target.value.replace(/\D/g, ''))}
+              autoFocus
+              required
+            />
+          ) : (
+            <PasswordField
+              id="confirm-secret"
+              name="confirmPassword"
+              value={value}
+              onChange={e => setValue(e.target.value)}
+              autoComplete="current-password"
+              autoFocus
+            />
+          )}
+          {onResend && (
+            <button type="button" className="inline-link resend-link" onClick={onResend} disabled={busy}>
+              Renvoyer le code
+            </button>
+          )}
         </div>
         <div className="dialog-actions dialog-actions-end">
           <button type="button" className="dialog-btn secondary-btn" onClick={onCancel} disabled={busy}>Annuler</button>
-          <button type="submit" className="dialog-btn" disabled={busy || !password}>Modifier</button>
+          <button type="submit" className="dialog-btn" disabled={busy || !value || (isCode && value.length !== 6)}>{submitLabel}</button>
         </div>
       </form>
     </div>
@@ -1540,6 +1580,7 @@ function EditAccount({ mode, user, onSuccess, onError, onCancel }) {
   const [form, setForm] = useState({ nom: '', prenom: '', email: '', nouveauMotDePasse: '', confirmation: '' })
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [sentTo, setSentTo] = useState('')
 
   const update = e => setForm({ ...form, [e.target.name]: e.target.value })
 
@@ -1561,18 +1602,31 @@ function EditAccount({ mode, user, onSuccess, onError, onCancel }) {
     return ''
   }
 
-  // 1) "Procéder" : validation locale, puis confirmation (email / infos) ou appel direct (mot de passe)
   function submit(e) {
     e.preventDefault()
     onError('')
     const problem = validate()
     if (problem) return onError(problem)
-    if (config.confirm) setConfirmOpen(true)
-    else run()
+    if (mode === 'password') sendCode()
+    else setConfirmOpen(true)
   }
 
-  // 2) Appel back, puis dialogue de succès (ou d'échec)
-  async function run(confirmationPassword) {
+  // Mot de passe : envoi du code par email, puis ouverture de la fenêtre de saisie
+  async function sendCode() {
+    setBusy(true)
+    try {
+      const res = await api.account.requestPasswordChange({ user, newPassword: form.nouveauMotDePasse })
+      setSentTo(res?.email || user?.email || '')
+      setConfirmOpen(true)
+    } catch (e) {
+      onError(e.message || 'Une erreur est survenue.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // `secret` = mot de passe actuel (infos, email) ou code reçu par email (mot de passe)
+  async function run(secret) {
     setBusy(true)
     const changes =
       mode === 'email' ? { email: form.email.trim().toLowerCase() }
@@ -1581,18 +1635,18 @@ function EditAccount({ mode, user, onSuccess, onError, onCancel }) {
     try {
       let result
       if (mode === 'email') {
-        result = await api.account.updateEmail({ user, ...changes, currentPassword: confirmationPassword })
+        result = await api.account.updateEmail({ user, ...changes, currentPassword: secret })
       } else if (mode === 'profile') {
-        result = await api.account.updateProfile({ user, ...changes, currentPassword: confirmationPassword })
+        result = await api.account.updateProfile({ user, ...changes, currentPassword: secret })
       } else {
-        result = await api.account.updatePassword({ user, newPassword: form.nouveauMotDePasse })
+        result = await api.account.confirmPasswordChange({ user, code: secret })
       }
-      // Le backend renvoie l'utilisateur mis à jour (profil, email) ou 204 sans corps (mot de passe)
       const updated = result?.utilisateur || result?.user || (result?.email ? result : {})
       setConfirmOpen(false)
-      onSuccess({ ...user, ...changes, ...updated })
+      onSuccess({ ...user, ...changes, ...updated }, { emailVerified: mode === 'password' })
     } catch (e) {
-      setConfirmOpen(false)
+      // Code erroné : la fenêtre reste ouverte pour réessayer ou renvoyer un code
+      if (mode !== 'password') setConfirmOpen(false)
       onError(e.message || 'Une erreur est survenue.')
     } finally {
       setBusy(false)
@@ -1699,13 +1753,28 @@ function EditAccount({ mode, user, onSuccess, onError, onCancel }) {
         </section>
       </main>
 
-      {confirmOpen && (
-        <ConfirmPasswordModal
+      {confirmOpen && (mode === 'password' ? (
+        <ConfirmSecretModal
+          title="Confirmation par email"
+          text={`Un code à 6 chiffres a été envoyé à ${sentTo}. Saisissez-le pour confirmer.`}
+          label="Code de confirmation"
+          submitLabel="Valider"
+          secret="code"
+          busy={busy}
+          onConfirm={run}
+          onCancel={() => setConfirmOpen(false)}
+          onResend={sendCode}
+        />
+      ) : (
+        <ConfirmSecretModal
+          title="Confirmation de modification"
+          text="Saisissez votre mot de passe pour confirmer"
+          label="Mot de passe"
           busy={busy}
           onConfirm={run}
           onCancel={() => setConfirmOpen(false)}
         />
-      )}
+      ))}
     </>
   )
 }
@@ -1764,9 +1833,10 @@ export default function App() {
     const mode = successDialogMode
     setSuccessDialogMode(null)
 
+    if (mode === 'emailVerified') return setSuccessDialogMode('update')
     if (mode === 'logout') return navigate('home')
     if (mode === 'publish') return
-    if (mode === 'update') return navigate(returnTo)
+    if (mode === 'update') return navigate(backTo)
 
     if (pendingUser) {
       setUser(pendingUser)
@@ -1774,6 +1844,13 @@ export default function App() {
     }
     setPendingUser(null)
     navigate(isAdmin(pendingUser) ? 'moderation' : 'study')
+  }
+
+  function handleAccountUpdated(updatedUser, { emailVerified = false } = {}) {
+    const { motDePasse, ...sessionUser } = updatedUser
+    setUser(sessionUser)
+    localStorage.setItem('user', JSON.stringify(sessionUser))
+    setSuccessDialogMode(emailVerified ? 'emailVerified' : 'update')
   }
 
   // Ouvre une page de modification du compte en mémorisant l'écran d'origine
@@ -1791,8 +1868,8 @@ export default function App() {
     setSuccessDialogMode('update')
   }
 
-  // La session est fermée tout de suite, la validation s'affiche ensuite (Ok -> accueil)
   function logout() {
+    api.auth.logout(user)
     setUser(null)
     localStorage.removeItem('user')
     setAccount(false)
@@ -1803,15 +1880,18 @@ export default function App() {
   const isModerationScreen = MODERATION_SCREENS.includes(screen)
   const showHeader = screen !== 'login' && screen !== 'register' && !isEditScreen
 
-  // Pages protégées : connexion requise (modification du compte, modération), rôle admin pour la modération.
-  // Aucune redirection pendant la validation de déconnexion (« Ok » ramène à l'accueil).
+  const admin = isAdmin(user)
+  const adminBlocked = admin && !ADMIN_SCREENS.includes(screen)
+  const backTo = admin && !ADMIN_SCREENS.includes(returnTo) ? 'moderation' : returnTo
+  
   useEffect(() => {
     if (successDialogMode === 'logout') return
-    if ((isEditScreen || isModerationScreen) && !user) navigate('login')
-    else if (isModerationScreen && !isAdmin(user)) navigate('study')
+    if ((isEditScreen || isModerationScreen) && !user) return navigate('login')
+    if (isModerationScreen && !admin) return navigate('study')
+    if (admin && !ADMIN_SCREENS.includes(screen)) return navigate('moderation')
   }, [screen, user, successDialogMode])
-
-  return (
+  
+return (
     <div className="app">
       {showHeader && (
         <Header 
@@ -1832,7 +1912,7 @@ export default function App() {
       {screen === 'home' && <Home navigate={navigate}/>} 
       {screen === 'login' && <Auth mode="login" navigate={navigate} onSuccess={handleAuthSuccess} onError={setError}/>} 
       {screen === 'register' && <Auth mode="register" navigate={navigate} onSuccess={handleAuthSuccess} onError={setError}/>} 
-      {screen === 'study' && <Study navigate={navigate}/>} 
+      {screen === 'study' && !adminBlocked && <Study navigate={navigate}/>} 
       {isEditScreen && user && (
         <EditAccount
           key={screen}
@@ -1840,14 +1920,14 @@ export default function App() {
           user={user}
           onSuccess={handleAccountUpdated}
           onError={setError}
-          onCancel={() => navigate(returnTo)}
+          onCancel={() => navigate(backTo)}
         />
       )}
       {screen === 'moderation' && isAdmin(user) && <Moderation navigate={navigate}/>}
       {isModerationScreen && screen !== 'moderation' && isAdmin(user) && (
         <ModerationList key={screen} kind={screen.replace('moderation-', '')} onError={setError}/>
       )}
-      {screen === 'comments' && <Comments user={user} onError={setError} onPublished={() => setSuccessDialogMode('publish')}/>} 
+      {screen === 'comments' && !adminBlocked && <Comments user={user} onError={setError} onPublished={() => setSuccessDialogMode('publish')}/>}
       
       {successDialogMode && (
         <SuccessModal mode={successDialogMode} onConfirm={confirmSuccessDialog} />

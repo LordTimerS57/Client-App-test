@@ -14,8 +14,16 @@ const accountPath = (user, suffix = '') => {
 }
 
 export const api = {
-  users: { list: () => request('/users'), get: (matricule) => request(`/users/${encodeURIComponent(matricule)}`), messages: (matricule) => request(`/users/${encodeURIComponent(matricule)}/messages`) },
-  auth: { register: (user) => request('/auth/register', { method: 'POST', body: JSON.stringify(user) }), login: (credentials) => request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }) },
+  users: { 
+    list: () => request('/users'), 
+    get: (matricule) => request(`/users/${encodeURIComponent(matricule)}`), 
+    messages: (matricule) => request(`/users/${encodeURIComponent(matricule)}/messages`) 
+  },
+  auth: {
+    register: (user) => request('/auth/register', { method: 'POST', body: JSON.stringify(user) }),
+    login: (credentials) => request('/auth/login', { method: 'POST', body: JSON.stringify(credentials) }),
+    logout: (user) => request('/auth/logout', { method: 'POST', body: JSON.stringify({ matricule: user.matricule }) }),
+  },
   messages: {
     list: (filters = {}) => { const query = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== '' && value != null)); return request(`/messages?${query}`) },
     get: (id) => request(`/messages/${id}`),
@@ -26,6 +34,7 @@ export const api = {
   account: {
     updateProfile: ({ user, nom, prenom, currentPassword }) => request(accountPath(user, '/profile'), { method: 'PUT', body: JSON.stringify({ nom, prenom, currentPassword }) }),
     updateEmail: ({ user, email, currentPassword }) => request(accountPath(user, '/email'), { method: 'PUT', body: JSON.stringify({ email, currentPassword }) }),
-    updatePassword: ({ user, newPassword }) => request(accountPath(user, '/password'), { method: 'PUT', body: JSON.stringify({ newPassword }) }),
+    requestPasswordChange: ({ user, newPassword }) => request(accountPath(user, '/password/request'), { method: 'POST', body: JSON.stringify({ newPassword }) }),
+    confirmPasswordChange: ({ user, code }) => request(accountPath(user, '/password/confirm'), { method: 'POST', body: JSON.stringify({ code }) }),
   },
 }

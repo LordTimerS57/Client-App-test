@@ -1618,3 +1618,20 @@ grid-template-columns: 1fr;
 grid-template-columns: 1fr;
 }
 }
+
+.code-input {
+  text-align: center;
+  font-size: 20px;
+  letter-spacing: 8px;
+}
+
+.resend-link {
+  align-self: flex-start;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.resend-link:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
