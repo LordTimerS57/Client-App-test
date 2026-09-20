@@ -13,6 +13,8 @@ const accountPath = (user, suffix = '') => {
   return `/users/${encodeURIComponent(user.matricule)}${suffix}`
 }
 
+const matriculeQuery = (matricule) => `?matricule=${encodeURIComponent(matricule ?? '')}`
+
 export const api = {
   users: { 
     list: () => request('/users'), 
@@ -29,7 +31,9 @@ export const api = {
     get: (id) => request(`/messages/${id}`),
     getReponses: (id) => request(`/messages/${id}/reponses`), // Récupère les réponses directes (les fils) d'un message donné
     create: (message) => request('/messages', { method: 'POST', body: JSON.stringify(message) }),
-    report: (id) => request(`/messages/${id}/signaler`, { method: 'PUT' }),
+    update: (id, message) => request(`/messages/${id}`, { method: 'PUT', body: JSON.stringify(message) }),
+    remove: (id, matricule) => request(`/messages/${id}${matriculeQuery(matricule)}`, { method: 'DELETE' }),
+    report: (id, matricule) => request(`/messages/${id}/signaler${matriculeQuery(matricule)}`, { method: 'PUT' }),
   },
   account: {
     updateProfile: ({ user, nom, prenom, currentPassword }) => request(accountPath(user, '/profile'), { method: 'PUT', body: JSON.stringify({ nom, prenom, currentPassword }) }),
@@ -37,4 +41,13 @@ export const api = {
     requestPasswordChange: ({ user, newPassword }) => request(accountPath(user, '/password/request'), { method: 'POST', body: JSON.stringify({ newPassword }) }),
     confirmPasswordChange: ({ user, code }) => request(accountPath(user, '/password/confirm'), { method: 'POST', body: JSON.stringify({ code }) }),
   },
+}
+
+// URL de la WebSocket, déduite de VITE_API_URL (/api en dev, URL complète en production).
+export function messagesSocketUrl() {
+  if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL
+  const url = new URL(API_URL, window.location.href)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  url.pathname = url.pathname.replace(/\/api\/?$/, '') + '/ws/messages'
+  return url.toString()
 }

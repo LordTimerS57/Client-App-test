@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import './styles.css'
 import logo from './assets/logo.jpg' 
 
 let externalApi = null
+let socketUrl = null
 try {
   const mod = await import('./api')
   externalApi = mod.api || mod.default
+  socketUrl = mod.messagesSocketUrl
 } catch {
   externalApi = null
 }
@@ -37,9 +39,9 @@ function parseApiError(e) {
   return new Error(msg || 'Une erreur survenue lors du traitement.')
 }
 
-async function callExternal(fn, payload) {
+async function callExternal(fn, ...args) {
   try {
-    const res = await fn(payload)
+    const res = await fn(...args)
     if (res?.error || (res?.status && res?.status >= 400)) {
       throw new Error(res?.message || res?.error || `Erreur serveur (${res?.status || 500})`)
     }
@@ -117,6 +119,14 @@ function mockUpdateUser(user, changes, { currentPassword, check, verify = true }
 }
 
 let mockPasswordChange = null // { code, newPassword }
+
+// Aplatit l'arbre : commentaires racines + réponses à tous les niveaux.
+// Chaque réponse garde le texte de son parent, pour donner le contexte à l'admin.
+const flattenMessages = (list, parent = null) =>
+  list.flatMap(m => [
+    parent ? { ...m, parentContent: parent.contenu || parent.content } : m,
+    ...flattenMessages(m.replies || m.messagesReponses || [], m)
+  ])
 
 const api = {
   auth: {
@@ -201,8 +211,27 @@ const api = {
       return newMsg
     },
 
-    async report(id) {
-      if (externalApi?.messages?.report) return callExternal(externalApi.messages.report, id)
+    async update(id, data) {
+      if (externalApi?.messages?.update) return callExternal(externalApi.messages.update, id, data)
+      const edit = list => list.forEach(m => {
+        if (String(m.id) === String(id)) m.contenu = data.contenu
+        edit(m.replies || [])
+      })
+      const msgs = mockStore.getMessages()
+      edit(msgs)
+      mockStore.saveMessages(msgs)
+    },
+
+    async remove(id, matricule) {
+      if (externalApi?.messages?.remove) return callExternal(externalApi.messages.remove, id, matricule)
+      const strip = list => list
+        .filter(m => String(m.id) !== String(id))
+        .map(m => ({ ...m, replies: strip(m.replies || []) }))
+      mockStore.saveMessages(strip(mockStore.getMessages()))
+    },
+
+    async report(id, matricule) {
+      if (externalApi?.messages?.report) return callExternal(externalApi.messages.report, id, matricule)
       const flag = list => list.forEach(m => {
         if (String(m.id) === String(id)) m.statut = 'SIGNALE'
         flag(m.replies || [])
@@ -230,7 +259,9 @@ const api = {
     },
     async reports() {
       const comments = await api.moderation.comments()
-      return comments.filter(m => reportCount(m) > 0).sort((a, b) => reportCount(b) - reportCount(a) || byDateDesc(a, b))
+      return flattenMessages(comments)
+        .filter(m => reportCount(m) > 0)
+        .sort((a, b) => reportCount(b) - reportCount(a) || byDateDesc(a, b))
     }
   },
   account: {
@@ -334,6 +365,35 @@ function relativeDate(value) {
   if (hours < 24) return `il y a ${hours} h`
   const days = Math.floor(hours / 24)
   return days < 7 ? `il y a ${days} j` : date.toLocaleDateString('fr-FR')
+}
+
+// Écoute la WebSocket des messages : reconnexion automatique, et resynchronisation à chaque (re)connexion
+function useMessagesSocket(onEvent) {
+  const handler = useRef(onEvent)
+  handler.current = onEvent
+
+  useEffect(() => {
+    if (!socketUrl) return // mode démo : pas de serveur
+    let ws = null
+    let timer = null
+    let closed = false
+    let delay = 1000
+
+    const connect = () => {
+      try { ws = new WebSocket(socketUrl()) } catch { return }
+      ws.onopen = () => { delay = 1000; handler.current({ type: 'OPEN' }) }
+      ws.onmessage = e => { try { handler.current(JSON.parse(e.data)) } catch { /* message ignoré */ } }
+      ws.onerror = () => ws.close()
+      ws.onclose = () => {
+        if (closed) return
+        timer = setTimeout(connect, delay)
+        delay = Math.min(delay * 2, 15000)
+      }
+    }
+
+    connect()
+    return () => { closed = true; clearTimeout(timer); ws?.close() }
+  }, [])
 }
 
 function Logo({ className = "logo-svg" }) {
@@ -926,10 +986,10 @@ function CommentRow({ id, item, open, onToggle }) {
   const name = author.prenom || 'Utilisateur'
   const content = item.contenu || item.content || ''
   const reports = reportCount(item)
-  const allReplies = item.replies || item.messagesReponses || []   
+  const allReplies = item.replies || item.messagesReponses || []
   const replies = allReplies.filter(reply => reply && typeof reply === 'object')
   const countReplies = list => list.reduce((n, r) => n + 1 + countReplies(r.replies || r.messagesReponses || []), 0)
-  const repliesCount = item.repliesCount ?? countReplies(children)
+  const repliesCount = item.repliesCount ?? countReplies(replies)
   const published = new Date(item.dateDePublication)
   const fullDate = Number.isNaN(published.getTime())
     ? ''
@@ -953,6 +1013,11 @@ function CommentRow({ id, item, open, onToggle }) {
         </span>
       }
     >
+      {item.parentContent && (
+        <p className="accordion-meta">
+          ↳ Réponse au commentaire : {item.parentContent.slice(0, 140)}{item.parentContent.length > 140 ? '…' : ''}
+        </p>
+      )}
       <p className="discussion-content">{content}</p>
       <p className="accordion-meta">
         {[author.matricule && `Matricule ${author.matricule}`, fullDate].filter(Boolean).join(' · ')}
@@ -1000,7 +1065,9 @@ function ModerationList({ kind, onError }) {
   const [items, setItems] = useState(null) // null = chargement en cours
   const [search, setSearch] = useState('')
   const [role, setRole] = useState('all')
-  const [openId, setOpenId] = useState(null) // un seul élément ouvert à la fois
+  const [openId, setOpenId] = useState(null)
+  const [tick, setTick] = useState(0)
+  useMessagesSocket(() => { if (kind !== 'users') setTick(v => v + 1) }) // un seul élément ouvert à la fois
 
   useEffect(() => {
     let alive = true
@@ -1023,7 +1090,7 @@ function ModerationList({ kind, onError }) {
       })
       .catch(e => { if (alive) { setItems([]); onError(e.message) } })
     return () => { alive = false }
-  }, [kind])
+  }, [kind, tick])
 
   const terms = norm(search).split(/\s+/).filter(Boolean)
   const visible = (items || []).filter(item => {
@@ -1078,17 +1145,24 @@ function ModerationList({ kind, onError }) {
   )
 }
 
-function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds }) {  const author = item.author ? item.author : (item.envoyeur || {})
+const hasVisible = m => m.statut !== 'SUPPRIME' || (m.replies || m.messagesReponses || []).some(hasVisible)
+
+function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds, editingId, editText, setEditText, onToggleEdit, onSubmitEdit, onDelete }) {
+  const author = item.author ? item.author : (item.envoyeur || {})
   const authorName = item.author ? item.author.prenom : (author.prenom || 'Vous')
   const authorRole = item.author ? item.author.role : roleLabel(author.role)
   const initials = item.author?.initials || (authorName[0] || 'F')
   const isProf = item.author?.isProf || isStaffRole(author.role)
   const isOther = item.author?.isOther
   const timeText = item.date || relativeDate(item.dateDePublication)
-  const children = item.replies || item.messagesReponses || []
-  const canReply = user && isRealData
+  const children = (item.replies || item.messagesReponses || []).filter(hasVisible)
+  const deleted = item.statut === 'SUPPRIME'
+  // Mon propre message : je peux le modifier / supprimer, mais ni y répondre ni le signaler
+  const isMine = !!user && isRealData && !!author.matricule && author.matricule === user.matricule
+  const canReply = !!user && isRealData && !isMine && !deleted
+  const canReport = canReply
   const isReplying = replyingId === item.id
-  const canReport = user && isRealData
+  const isEditing = editingId === item.id
   const reported = item.statut === 'SIGNALE' || reportedIds.includes(item.id)
   const repliesCount = item.repliesCount ?? children.length
 
@@ -1107,15 +1181,30 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
         </div>
       </div>
 
-      <p className={depth > 0 ? 'reply-content' : 'discussion-content'}>
-        {item.contenu || item.content}
-      </p>
+      {isEditing ? (
+        <form className="reply-form" onSubmit={e => { e.preventDefault(); onSubmitEdit(item.id) }}>
+          <textarea
+            value={editText}
+            onChange={e => setEditText(e.target.value)}
+            rows="3"
+            autoFocus
+          />
+          <div className="reply-form-actions">
+            <button type="button" className="dialog-btn secondary-btn" onClick={() => onToggleEdit(null)}>Annuler</button>
+            <button type="submit" className="dialog-btn" disabled={submitting || !editText.trim()}>Enregistrer</button>
+          </div>
+        </form>
+      ) : (
+        <p className={`${depth > 0 ? 'reply-content' : 'discussion-content'} ${deleted ? 'message-deleted' : ''}`}>
+          {deleted ? 'Ce message a été supprimé.' : (item.contenu || item.content)}
+        </p>
+      )}
 
       <div className="discussion-footer">
         {depth === 0 && (
           <span className="replies-count">{repliesCount} réponse{repliesCount > 1 ? 's' : ''}</span>
         )}
-        {(canReply || canReport) && (
+        {!deleted && !isEditing && (canReply || canReport || isMine) && (
           <div className="discussion-actions">
             {canReply && (
               <button type="button" className="reply-trigger" onClick={() => onToggleReply(isReplying ? null : item.id)}>
@@ -1126,6 +1215,16 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
               <button type="button" className="report-trigger" onClick={() => onReport(item.id)} disabled={reported}>
                 {reported ? 'Signalé' : 'Signaler'}
               </button>
+            )}
+            {isMine && (
+              <>
+                <button type="button" className="edit-trigger" onClick={() => onToggleEdit(item.id, item.contenu || item.content || '')}>
+                  Modifier
+                </button>
+                <button type="button" className="delete-trigger" onClick={() => onDelete(item.id)}>
+                  Supprimer
+                </button>
+              </>
             )}
           </div>
         )}
@@ -1161,9 +1260,15 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
               setReplyText={setReplyText}
               onToggleReply={onToggleReply}
               onSubmitReply={onSubmitReply}
+              submitting={submitting}
               onReport={onReport}
               reportedIds={reportedIds}
-              submitting={submitting}
+              editingId={editingId}
+              editText={editText}
+              setEditText={setEditText}
+              onToggleEdit={onToggleEdit}
+              onSubmitEdit={onSubmitEdit}
+              onDelete={onDelete}
             />
           ))}
         </div>
@@ -1183,6 +1288,17 @@ function Comments({ user, onError, onPublished }) {
   const [replyText, setReplyText] = useState('')
   const [replySubmitting, setReplySubmitting] = useState(false)
   const [reportedIds, setReportedIds] = useState([])
+  const [editingId, setEditingId] = useState(null)
+  const [editText, setEditText] = useState('')
+  const [editSubmitting, setEditSubmitting] = useState(false)
+  const [deleteId, setDeleteId] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  useMessagesSocket(() => setTick(v => v + 1))
+  
+  useEffect(() => {
+    const t = setInterval(() => setTick(v => v + 1), 300000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => { 
     api.messages.list({ q: search })
@@ -1198,6 +1314,44 @@ function Comments({ user, onError, onPublished }) {
   function toggleReply(id) {
     setReplyingId(id)
     setReplyText('')
+    setEditingId(null)
+  }
+
+  function toggleEdit(id, content = '') {
+    setEditingId(id)
+    setEditText(content)
+    setReplyingId(null)
+  }
+
+  async function submitEdit(id) {
+    if (!editText.trim()) return
+    setEditSubmitting(true)
+    try {
+      await api.messages.update(id, { contenu: editText.trim(), envoyeur: { matricule: user.matricule } })
+      setEditingId(null)
+      setEditText('')
+      setTick(v => v + 1)
+      onPublished('edit')
+    } catch (e) {
+      onError(e.message)
+    } finally {
+      setEditSubmitting(false)
+    }
+  }
+
+  async function confirmDelete() {
+    setDeleting(true)
+    try {
+      await api.messages.remove(deleteId, user.matricule)
+      setDeleteId(null)
+      setTick(v => v + 1)
+      onPublished('delete')
+    } catch (e) {
+      setDeleteId(null)
+      onError(e.message)
+    } finally {
+      setDeleting(false)
+    }
   }
 
   async function submitReply(parentId) {
@@ -1223,7 +1377,7 @@ function Comments({ user, onError, onPublished }) {
 
   async function reportMessage(id) {
     try {
-      await api.messages.report(id)
+      await api.messages.report(id, user.matricule)
       setReportedIds(ids => [...ids, id])
       setTick(v => v + 1)
       onPublished('report')
@@ -1285,8 +1439,9 @@ function Comments({ user, onError, onPublished }) {
     }
   ]
 
-  const displayList = messages.length > 0 ? messages : defaultDiscussions
-  const isRealData = messages.length > 0  
+  const visibleMessages = messages.filter(hasVisible)
+  const displayList = visibleMessages.length > 0 ? visibleMessages : defaultDiscussions
+  const isRealData = visibleMessages.length > 0 
 
   return (
     <>
@@ -1348,9 +1503,15 @@ function Comments({ user, onError, onPublished }) {
               setReplyText={setReplyText}
               onToggleReply={toggleReply}
               onSubmitReply={submitReply}
+              submitting={replySubmitting || editSubmitting}
               onReport={reportMessage}
               reportedIds={reportedIds}
-              submitting={replySubmitting}
+              editingId={editingId}
+              editText={editText}
+              setEditText={setEditText}
+              onToggleEdit={toggleEdit}
+              onSubmitEdit={submitEdit}
+              onDelete={setDeleteId}
             />
           ))}
         </section>
@@ -1362,6 +1523,16 @@ function Comments({ user, onError, onPublished }) {
           busy={publishing}
           onConfirm={confirmPublish}
           onCancel={() => setConfirmOpen(false)}
+        />
+      )}
+      
+      {deleteId !== null && (
+        <ConfirmPublishModal
+          busy={deleting}
+          title="Suppression du commentaire"
+          text={<>Voulez-vous vraiment supprimer<br />ce commentaire ?</>}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteId(null)}
         />
       )}
     </>
@@ -1439,6 +1610,16 @@ const SUCCESS_CONTENT = {
   reply: {
     title: 'Réponse envoyée',
     text: 'Votre réponse a bien été publiée sous ce commentaire.',
+    button: 'D’accord'
+  },
+  edit: {
+    title: 'Commentaire modifié',
+    text: 'Votre commentaire a bien été mis à jour.',
+    button: 'D’accord'
+  },
+  delete: {
+    title: 'Commentaire supprimé',
+    text: 'Votre commentaire a bien été supprimé.',
     button: 'D’accord'
   },
   report: {
@@ -1889,7 +2070,7 @@ export default function App() {
 
     if (mode === 'emailVerified') return setSuccessDialogMode('update')
     if (mode === 'logout') return navigate('home')
-    if (['publish', 'reply', 'report'].includes(mode)) return
+    if (['publish', 'reply', 'report', 'edit', 'delete'].includes(mode)) return
     if (mode === 'update') return navigate(backTo)
 
     if (pendingUser) {
@@ -1912,14 +2093,6 @@ export default function App() {
     setReturnTo(screen)
     setAccount(false)
     navigate(next)
-  }
-
-  // Modification enregistrée : on met à jour la session, puis on affiche la validation
-  function handleAccountUpdated(updatedUser) {
-    const { motDePasse, ...sessionUser } = updatedUser // jamais de mot de passe dans la session
-    setUser(sessionUser)
-    localStorage.setItem('user', JSON.stringify(sessionUser))
-    setSuccessDialogMode('update')
   }
 
   function logout() {
