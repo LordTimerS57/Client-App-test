@@ -57,6 +57,7 @@ const toList = (res, keys = []) => {
 
 // Nombre de signalements d'un message (le champ exact dépend du backend : booléen, nombre ou liste)
 const reportCount = message => {
+  if (message?.statut === 'SIGNALE') return 1
   const value = message?.signale ?? message?.signaled ?? message?.reported ?? message?.signalements ?? message?.nbSignalements
   if (Array.isArray(value)) return value.length
   if (typeof value === 'number') return value
@@ -182,6 +183,7 @@ const api = {
       }
       return msgs
     },
+
     async create(msgData) {
       if (externalApi?.messages?.create) {
         try { return await externalApi.messages.create(msgData) } catch (e) { /* fallback */ }
@@ -197,8 +199,20 @@ const api = {
       msgs.unshift(newMsg)
       mockStore.saveMessages(msgs)
       return newMsg
+    },
+
+    async report(id) {
+      if (externalApi?.messages?.report) return callExternal(externalApi.messages.report, id)
+      const flag = list => list.forEach(m => {
+        if (String(m.id) === String(id)) m.statut = 'SIGNALE'
+        flag(m.replies || [])
+      })
+      const msgs = mockStore.getMessages()
+      flag(msgs)
+      mockStore.saveMessages(msgs)
     }
   },
+
   // Lecture seule pour l'espace de modération (les erreurs remontent, pas de repli silencieux)
   moderation: {
     async users() {
@@ -284,6 +298,7 @@ const ROUTES = {
 
 const EDIT_SCREENS = ['edit-profile', 'edit-email', 'edit-password']
 const MODERATION_SCREENS = ['moderation', 'moderation-users', 'moderation-comments', 'moderation-reports']
+const ADMIN_SCREENS = ['home', 'login', 'register', ...EDIT_SCREENS, ...MODERATION_SCREENS]
 
 // Compte administrateur : e-mail défini dans .env (VITE_ADMIN_EMAIL) ou rôle 'ADMIN' renvoyé par le backend.
 // ⚠ Simple aiguillage d'interface : les droits réels doivent aussi être contrôlés côté serveur.
@@ -472,12 +487,12 @@ function EyeIcon({ visible }) {
   return (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {visible ? (
+        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22"/>
+      ) : (
         <>
           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
           <circle cx="12" cy="12" r="3"/>
         </>
-      ) : (
-        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24M1 1l22 22"/>
       )}
     </svg>
   )
@@ -913,7 +928,8 @@ function CommentRow({ id, item, open, onToggle }) {
   const reports = reportCount(item)
   const allReplies = item.replies || item.messagesReponses || []   
   const replies = allReplies.filter(reply => reply && typeof reply === 'object')
-  const repliesCount = item.repliesCount ?? allReplies.length
+  const countReplies = list => list.reduce((n, r) => n + 1 + countReplies(r.replies || r.messagesReponses || []), 0)
+  const repliesCount = item.repliesCount ?? countReplies(children)
   const published = new Date(item.dateDePublication)
   const fullDate = Number.isNaN(published.getTime())
     ? ''
@@ -1062,8 +1078,7 @@ function ModerationList({ kind, onError }) {
   )
 }
 
-function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting }) {
-  const author = item.author ? item.author : (item.envoyeur || {})
+function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds }) {  const author = item.author ? item.author : (item.envoyeur || {})
   const authorName = item.author ? item.author.prenom : (author.prenom || 'Vous')
   const authorRole = item.author ? item.author.role : roleLabel(author.role)
   const initials = item.author?.initials || (authorName[0] || 'F')
@@ -1073,6 +1088,9 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
   const children = item.replies || item.messagesReponses || []
   const canReply = user && isRealData
   const isReplying = replyingId === item.id
+  const canReport = user && isRealData
+  const reported = item.statut === 'SIGNALE' || reportedIds.includes(item.id)
+  const repliesCount = item.repliesCount ?? children.length
 
   return (
     <div className={depth > 0 ? 'reply-card' : 'discussion-card'}>
@@ -1095,12 +1113,21 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
 
       <div className="discussion-footer">
         {depth === 0 && (
-          <span className="replies-count">{item.repliesCount ?? children.length} réponses</span>
+          <span className="replies-count">{repliesCount} réponse{repliesCount > 1 ? 's' : ''}</span>
         )}
-        {canReply && (
-          <button type="button" className="reply-trigger" onClick={() => onToggleReply(isReplying ? null : item.id)}>
-            Répondre
-          </button>
+        {(canReply || canReport) && (
+          <div className="discussion-actions">
+            {canReply && (
+              <button type="button" className="reply-trigger" onClick={() => onToggleReply(isReplying ? null : item.id)}>
+                Répondre
+              </button>
+            )}
+            {canReport && (
+              <button type="button" className="report-trigger" onClick={() => onReport(item.id)} disabled={reported}>
+                {reported ? 'Signalé' : 'Signaler'}
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -1134,6 +1161,8 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
               setReplyText={setReplyText}
               onToggleReply={onToggleReply}
               onSubmitReply={onSubmitReply}
+              onReport={onReport}
+              reportedIds={reportedIds}
               submitting={submitting}
             />
           ))}
@@ -1153,6 +1182,7 @@ function Comments({ user, onError, onPublished }) {
   const [replyingId, setReplyingId] = useState(null)
   const [replyText, setReplyText] = useState('')
   const [replySubmitting, setReplySubmitting] = useState(false)
+  const [reportedIds, setReportedIds] = useState([])
 
   useEffect(() => { 
     api.messages.list({ q: search })
@@ -1183,10 +1213,22 @@ function Comments({ user, onError, onPublished }) {
       setReplyingId(null)
       setReplyText('')
       setTick(v => v + 1)
+      onPublished('reply')
     } catch (e) {
       onError(e.message)
     } finally {
       setReplySubmitting(false)
+    }
+  }
+
+  async function reportMessage(id) {
+    try {
+      await api.messages.report(id)
+      setReportedIds(ids => [...ids, id])
+      setTick(v => v + 1)
+      onPublished('report')
+    } catch (e) {
+      onError(e.message)
     }
   }
 
@@ -1306,6 +1348,8 @@ function Comments({ user, onError, onPublished }) {
               setReplyText={setReplyText}
               onToggleReply={toggleReply}
               onSubmitReply={submitReply}
+              onReport={reportMessage}
+              reportedIds={reportedIds}
               submitting={replySubmitting}
             />
           ))}
@@ -1391,6 +1435,16 @@ const SUCCESS_CONTENT = {
     title: 'Email validé',
     text: 'Votre adresse email a bien été confirmée.',
     button: 'Continuer'
+  },
+  reply: {
+    title: 'Réponse envoyée',
+    text: 'Votre réponse a bien été publiée sous ce commentaire.',
+    button: 'D’accord'
+  },
+  report: {
+    title: 'Signalement envoyé',
+    text: 'Merci, ce commentaire a été transmis à la modération.',
+    button: 'D’accord'
   },
   login: {
     title: 'Connexion réussie',
@@ -1835,7 +1889,7 @@ export default function App() {
 
     if (mode === 'emailVerified') return setSuccessDialogMode('update')
     if (mode === 'logout') return navigate('home')
-    if (mode === 'publish') return
+    if (['publish', 'reply', 'report'].includes(mode)) return
     if (mode === 'update') return navigate(backTo)
 
     if (pendingUser) {
@@ -1927,7 +1981,7 @@ return (
       {isModerationScreen && screen !== 'moderation' && isAdmin(user) && (
         <ModerationList key={screen} kind={screen.replace('moderation-', '')} onError={setError}/>
       )}
-      {screen === 'comments' && !adminBlocked && <Comments user={user} onError={setError} onPublished={() => setSuccessDialogMode('publish')}/>}
+      {screen === 'comments' && !adminBlocked && <Comments user={user} onError={setError} onPublished={(mode = 'publish') => setSuccessDialogMode(mode)}/>}
       
       {successDialogMode && (
         <SuccessModal mode={successDialogMode} onConfirm={confirmSuccessDialog} />
