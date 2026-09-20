@@ -324,11 +324,12 @@ const ROUTES = {
   'moderation-reports': `${BASE}/moderation/reports`,
   'edit-profile': `${BASE}/account/profile`,
   'edit-email': `${BASE}/account/email`,
-  'edit-password': `${BASE}/account/password`
+  'edit-password': `${BASE}/account/password`,
+  activity: `${BASE}/activity`,
 }
 
 const EDIT_SCREENS = ['edit-profile', 'edit-email', 'edit-password']
-const MODERATION_SCREENS = ['moderation', 'moderation-users', 'moderation-comments', 'moderation-reports']
+const MODERATION_SCREENS = ['moderation', 'moderation-users', 'moderation-comments', 'moderation-reports', 'activity']
 const ADMIN_SCREENS = ['home', 'login', 'register', ...EDIT_SCREENS, ...MODERATION_SCREENS]
 
 // Compte administrateur : e-mail défini dans .env (VITE_ADMIN_EMAIL) ou rôle 'ADMIN' renvoyé par le backend.
@@ -351,6 +352,7 @@ function pathToScreen(path = window.location.pathname) {
   if (clean === `${BASE}/account/profile` || clean === '/account/profile') return 'edit-profile'
   if (clean === `${BASE}/account/email` || clean === '/account/email') return 'edit-email'
   if (clean === `${BASE}/account/password` || clean === '/account/password') return 'edit-password'
+  if (clean === `${BASE}/activity` || clean === '/activity') return 'activity'
   return 'home'
 }
 
@@ -483,6 +485,7 @@ function Menu({ open, close, navigate, admin }) {
               <button onClick={() => navigate('moderation-users')}>Utilisateurs</button>
               <button onClick={() => navigate('moderation-comments')}>Commentaires</button>
               <button onClick={() => navigate('moderation-reports')}>Signalements</button>
+              <button onClick={() => navigate('activity')}>Activités</button>
             </>
           ) : (
             <>
@@ -861,6 +864,7 @@ function Moderation({ navigate }) {
     },
     {
       id: 'activity',
+      to: 'activity',
       title: 'Activités',
       text: 'Suivez l’activité de la plateforme.',
       icon: icon(<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>)
@@ -1176,6 +1180,53 @@ function ModerationList({ kind, onError }) {
   )
 }
 
+const COMMENT_ROLE_FILTERS = [
+  { key: 'prof', label: 'Prof' },
+  { key: 'etudiant', label: 'Étudiants' }
+]
+const COMMENT_SORTS = [
+  { key: 'oldest', label: 'Ancienne' },
+  { key: 'recent', label: 'Récente' }
+]
+
+const messageAuthor = m => m.author || m.envoyeur || {}
+const messageText = m => m.contenu || m.content || ''
+const messageChildren = m => m.replies || m.messagesReponses || []
+const messageTime = m => Date.parse(m?.dateDePublication) || 0
+const splitTerms = text => norm(text).split(/\s+/).filter(Boolean)
+const toDayKey = value => {
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+const formatDay = key => (key ? new Date(`${key}T00:00:00`).toLocaleDateString('fr-FR') : '')
+
+// Garde un message s'il correspond aux critères, ou si l'une de ses réponses correspond
+// (le parent reste alors affiché pour donner le contexte).
+// L'objet d'une réponse est celui de son fil (les réponses ont toutes l'objet « Réponse »).
+function filterThread(node, criteria, parentObjet = '') {
+  const objetPath = `${parentObjet} ${node.objet || ''}`
+  const children = messageChildren(node)
+    .map(child => filterThread(child, criteria, objetPath))
+    .filter(Boolean)
+
+  const author = messageAuthor(node)
+  const haystack = norm(`${author.prenom || ''} ${author.nom || ''} ${messageText(node)}`)
+  const objetHaystack = norm(objetPath)
+
+  const matches =
+    node.statut !== 'SUPPRIME' &&
+    (criteria.role === 'all' || roleKey(author.role) === criteria.role) &&
+    (!criteria.day || toDayKey(node.dateDePublication) === criteria.day) &&
+    criteria.terms.every(term => haystack.includes(term)) &&
+    criteria.objetTerms.every(term => objetHaystack.includes(term))
+
+  if (!matches && children.length === 0) return null
+  return { ...node, replies: children, messagesReponses: children, repliesCount: children.length }
+}
+
+
 const hasVisible = m => m.statut !== 'SUPPRIME' || (m.replies || m.messagesReponses || []).some(hasVisible)
 
 function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds, editingId, editText, setEditText, onToggleEdit, onSubmitEdit, onDelete }) {
@@ -1311,7 +1362,16 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
 function Comments({ user, onError, onPublished }) { 
   const [messages, setMessages] = useState([])
   const [search, setSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')   // 'all' | 'prof' | 'etudiant'
+  const [sortOrder, setSortOrder] = useState('')        // '' (récent par défaut) | 'oldest' | 'recent'
+  const [objetSearch, setObjetSearch] = useState('')
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [openSection, setOpenSection] = useState(null)  // 'auteur' | 'date' | 'objet' | null
+  const [dayFilter, setDayFilter] = useState('')          // '' ou 'AAAA-MM-JJ'
+  const [dayPickerOpen, setDayPickerOpen] = useState(false)
+  const filterRef = useRef(null)
   const [question, setQuestion] = useState('')
+  const [subject, setSubject] = useState('')
   const [tick, setTick] = useState(0)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [publishing, setPublishing] = useState(false)
@@ -1331,16 +1391,34 @@ function Comments({ user, onError, onPublished }) {
     return () => clearInterval(t)
   }, [])
 
+  // On charge tout : le filtrage (nom, contenu, objet, rôle, réponses incluses) se fait côté client
   useEffect(() => { 
-    api.messages.list({ q: search })
+    api.messages.list({})
       .then(setMessages)
       .catch(e => onError(e.message)) 
-  }, [search, tick])
+  }, [tick])
 
   useEffect(() => { 
     const t = setInterval(() => setTick(v => v + 1), 60000)
     return () => clearInterval(t) 
   }, [])
+
+  // Ferme le menu de filtres au clic à l'extérieur
+  useEffect(() => {
+    if (!filtersOpen) return
+    const close = e => { if (!filterRef.current?.contains(e.target)) setFiltersOpen(false) }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [filtersOpen])
+
+  const toggleSection = key => setOpenSection(s => (s === key ? null : key))
+  const pickRole = key => setRoleFilter(r => (r === key ? 'all' : key))
+  const pickSort = key => setSortOrder(s => (s === key ? '' : key))
+
+  const togglePrecise = () => {
+    if (dayPickerOpen || dayFilter) { setDayPickerOpen(false); setDayFilter('') }
+    else setDayPickerOpen(true)
+  }
 
   function toggleReply(id) {
     setReplyingId(id)
@@ -1428,11 +1506,12 @@ function Comments({ user, onError, onPublished }) {
     setPublishing(true)
     try {
       await api.messages.create({
-        objet: 'Question',
+        objet: subject.trim() || 'Question',
         contenu: question.trim(),
         envoyeur: { prenom: user.prenom || 'Vous', matricule: user.matricule }
       })
       setQuestion('')
+      setSubject('')
       setTick(v => v + 1)
       setConfirmOpen(false)
       onPublished()
@@ -1442,6 +1521,15 @@ function Comments({ user, onError, onPublished }) {
     } finally {
       setPublishing(false)
     }
+  }
+
+  function resetFilters() {
+    setSearch('')
+    setRoleFilter('all')
+    setSortOrder('')
+    setObjetSearch('')
+    setDayFilter('')
+    setDayPickerOpen(false)
   }
 
   const defaultDiscussions = [
@@ -1471,8 +1559,31 @@ function Comments({ user, onError, onPublished }) {
   ]
 
   const visibleMessages = messages.filter(hasVisible)
-  const displayList = visibleMessages.length > 0 ? visibleMessages : defaultDiscussions
-  const isRealData = visibleMessages.length > 0 
+  const isRealData = visibleMessages.length > 0
+  const baseList = isRealData ? visibleMessages : defaultDiscussions
+
+  // ---- Filtres ----
+  const terms = splitTerms(search)
+  const objetTerms = splitTerms(objetSearch)
+  const filtersActive = terms.length > 0 || objetTerms.length > 0 || roleFilter !== 'all' || !!dayFilter
+  const panelActiveCount = (roleFilter !== 'all' ? 1 : 0) + (objetTerms.length > 0 ? 1 : 0) + (sortOrder ? 1 : 0) + (dayFilter ? 1 : 0)
+  const roleSel = COMMENT_ROLE_FILTERS.find(f => f.key === roleFilter)
+  const sortSel = COMMENT_SORTS.find(s => s.key === sortOrder)
+
+  // Tri des fils racines (récent par défaut). Les réponses restent en ordre chronologique.
+  const sortedList = [...baseList].sort((a, b) =>
+    sortOrder === 'oldest' ? messageTime(a) - messageTime(b) : messageTime(b) - messageTime(a)
+  )
+  const criteria = { role: roleFilter, terms, objetTerms, day: dayFilter }
+  const displayList = filtersActive
+    ? sortedList.map(item => filterThread(item, criteria)).filter(Boolean)
+    : sortedList
+
+  const chevron = (
+    <svg className="filter-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="6 9 12 15 18 9"/>
+    </svg>
+  )
 
   return (
     <>
@@ -1490,21 +1601,140 @@ function Comments({ user, onError, onPublished }) {
             <input 
               value={search} 
               onChange={e => setSearch(e.target.value)} 
-              placeholder="Rechercher des discussions..."
+              placeholder="Rechercher par nom ou par contenu..."
+              aria-label="Rechercher par nom ou par contenu"
             />
           </div>
-          <button className="filter-btn">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <line x1="4" y1="6" x2="20" y2="6"/>
-              <line x1="6" y1="12" x2="18" y2="12"/>
-              <line x1="8" y1="18" x2="16" y2="18"/>
-            </svg>
-            <span>Filtrer</span>
-          </button>
+
+          <div className="filter-wrapper" ref={filterRef}>
+            <button
+              type="button"
+              className={`filter-btn ${filtersOpen ? 'active' : ''}`}
+              onClick={() => setFiltersOpen(open => !open)}
+              aria-expanded={filtersOpen}
+              aria-haspopup="true"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="4" y1="6" x2="20" y2="6"/>
+                <line x1="6" y1="12" x2="18" y2="12"/>
+                <line x1="8" y1="18" x2="16" y2="18"/>
+              </svg>
+              <span>Filtrer</span>
+              {panelActiveCount > 0 && <span className="filter-count">{panelActiveCount}</span>}
+            </button>
+
+            {filtersOpen && (
+              <div className="filter-dropdown">
+                {/* A -> Auteur */}
+                <button type="button" className={`filter-row ${openSection === 'auteur' ? 'open' : ''}`}
+                        onClick={() => toggleSection('auteur')} aria-expanded={openSection === 'auteur'}>
+                  <span>Auteur</span>
+                  <span className="filter-row-value">{roleSel?.label}</span>
+                  {chevron}
+                </button>
+                {openSection === 'auteur' && (
+                  <div className="filter-sub">
+                    {COMMENT_ROLE_FILTERS.map(f => (
+                      <button type="button" key={f.key}
+                              className={`filter-option ${roleFilter === f.key ? 'selected' : ''}`}
+                              onClick={() => pickRole(f.key)}>
+                        {f.label}{roleFilter === f.key && <span>✓</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="dropdown-divider"></div>
+
+                {/* B -> Date */}
+                <button type="button" className={`filter-row ${openSection === 'date' ? 'open' : ''}`}
+                        onClick={() => toggleSection('date')} aria-expanded={openSection === 'date'}>
+                  <span>Date</span>
+                  <span className="filter-row-value">
+                    {[sortSel?.label, dayFilter && formatDay(dayFilter)].filter(Boolean).join(' · ')}
+                  </span>
+                  {chevron}
+                </button>
+                {openSection === 'date' && (
+                  <div className="filter-sub">
+                    {COMMENT_SORTS.map(s => (
+                      <button type="button" key={s.key}
+                              className={`filter-option ${sortOrder === s.key ? 'selected' : ''}`}
+                              onClick={() => pickSort(s.key)}>
+                        {s.label}{sortOrder === s.key && <span>✓</span>}
+                      </button>
+                    ))}
+
+                    <button type="button"
+                            className={`filter-option ${dayPickerOpen || dayFilter ? 'selected' : ''}`}
+                            onClick={togglePrecise}>
+                      Précise{(dayPickerOpen || dayFilter) && <span>✓</span>}
+                    </button>
+                    {(dayPickerOpen || dayFilter) && (
+                      <input
+                        type="date"
+                        className="filter-input"
+                        value={dayFilter}
+                        max={toDayKey(Date.now())}
+                        onChange={e => setDayFilter(e.target.value)}
+                        aria-label="Choisir une date"
+                      />
+                    )}
+                  </div>
+                )}
+                <div className="dropdown-divider"></div>
+
+                {/* C -> Objet */}
+                <button type="button" className={`filter-row ${openSection === 'objet' ? 'open' : ''}`}
+                        onClick={() => toggleSection('objet')} aria-expanded={openSection === 'objet'}>
+                  <span>Objet</span>
+                  <span className="filter-row-value">{objetSearch.trim()}</span>
+                  {chevron}
+                </button>
+                {openSection === 'objet' && (
+                  <div className="filter-sub">
+                    <input
+                      className="filter-input"
+                      value={objetSearch}
+                      onChange={e => setObjetSearch(e.target.value)}
+                      placeholder="Rechercher un objet..."
+                      aria-label="Rechercher un objet"
+                      autoFocus
+                    />
+                  </div>
+                )}
+
+                {(filtersActive || sortOrder) && (
+                  <>
+                    <div className="dropdown-divider"></div>
+                    <button type="button" className="filter-reset" onClick={resetFilters}>
+                      Réinitialiser les filtres
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
+
+        {(roleFilter !== 'all' || sortOrder || dayFilter || objetTerms.length > 0) && (
+          <div className="filter-tags">
+            {roleSel && <button type="button" className="filter-tag" onClick={() => setRoleFilter('all')}>Auteur : {roleSel.label} ×</button>}
+            {sortSel && <button type="button" className="filter-tag" onClick={() => setSortOrder('')}>Date : {sortSel.label} ×</button>}
+            {dayFilter && <button type="button" className="filter-tag" onClick={() => { setDayFilter(''); setDayPickerOpen(false) }}>Le {formatDay(dayFilter)} ×</button>}
+            {objetTerms.length > 0 && <button type="button" className="filter-tag" onClick={() => setObjetSearch('')}>Objet : {objetSearch.trim()} ×</button>}
+          </div>
+        )}
 
         <form className="question-box" onSubmit={requestPublish}>
           <h3>Poser une question</h3>
+          <input
+            className="subject-input"
+            value={subject}
+            onChange={e => setSubject(e.target.value)}
+            placeholder="Objet (facultatif)"
+            maxLength={200}
+            aria-label="Objet"
+          />
           <textarea 
             value={question} 
             onChange={e => setQuestion(e.target.value)} 
@@ -1520,6 +1750,15 @@ function Comments({ user, onError, onPublished }) {
             <button type="submit" className="publish-button">Publier</button>
           </div>
         </form>
+
+        {filtersActive && displayList.length === 0 && (
+          <p className="mod-empty">Aucun résultat pour ces filtres.</p>
+        )}
+        {filtersActive && displayList.length > 0 && (
+          <p className="mod-count">
+            {displayList.length} discussion{displayList.length > 1 ? 's' : ''} correspondante{displayList.length > 1 ? 's' : ''}
+          </p>
+        )}
 
         <section className="discussions-list">
           {displayList.map(item => (
@@ -1705,7 +1944,11 @@ function SuccessModal({ mode, onConfirm }) {
   )
 }
 
-function ConfirmPublishModal({ busy, onConfirm, onCancel }) {
+function ConfirmPublishModal({
+  busy, onConfirm, onCancel,
+  title = 'Confirmation de publication',
+  text = <>Voulez-vous vraiment publier<br />ce commentaire ?</>
+}) {
   return (
     <div className="modal-backdrop" onClick={busy ? undefined : onCancel}>
       <div
@@ -1715,8 +1958,8 @@ function ConfirmPublishModal({ busy, onConfirm, onCancel }) {
         onClick={e => e.stopPropagation()}
       >
         <button type="button" className="close-button" onClick={onCancel} disabled={busy} aria-label="Fermer">×</button>
-        <h2>Confirmation de publication</h2>
-        <p>Voulez-vous vraiment publier<br />ce commentaire ?</p>
+        <h2>{title}</h2>
+        <p>{text}</p>
         <div className="dialog-actions">
           <button type="button" className="dialog-btn secondary-btn" onClick={onConfirm} disabled={busy}>Oui</button>
           <button type="button" className="dialog-btn" onClick={onCancel} disabled={busy}>Non</button>
@@ -2065,6 +2308,295 @@ function ErrorModal({ message, close }) {
   ) 
 }
 
+// ================= Page Activités (admin) =================
+const DAY_MS = 24 * 60 * 60 * 1000
+// Fenêtres glissantes : modifiez ici pour changer les périodes
+const ACTIVITY_PERIODS = [
+  { key: 'day', label: '24 dernières heures', ms: DAY_MS },
+  { key: 'week', label: '7 derniers jours', ms: 7 * DAY_MS },
+  { key: 'month', label: '30 derniers jours', ms: 30 * DAY_MS },
+  { key: 'year', label: '12 derniers mois', ms: 365 * DAY_MS }
+]
+
+const repliesOf = m => m.replies || m.messagesReponses || []
+
+// Aplatit l'arbre (racines + réponses à tous les niveaux), sans les messages supprimés
+function collectMessages(list, isReply = false) {
+  return list.flatMap(m => [
+    ...(m.statut === 'SUPPRIME' ? [] : [{ ...m, isReply, authorRole: commentAuthor(m).role }]),
+    ...collectMessages(repliesOf(m), true)
+  ])
+}
+
+function countByPeriod(items, getDate, now) {
+  const counts = {}
+  for (const period of ACTIVITY_PERIODS) {
+    counts[period.key] = items.filter(item => {
+      const time = Date.parse(getDate(item))
+      return !Number.isNaN(time) && now - time <= period.ms
+    }).length
+  }
+  return counts
+}
+
+// Top 3 des auteurs (égalité : ordre alphabétique du nom)
+function topContributors(messages) {
+  const byUser = new Map()
+  for (const m of messages) {
+    const author = commentAuthor(m)
+    if (!author.matricule) continue
+    const entry = byUser.get(author.matricule) || { author, count: 0 }
+    entry.count += 1
+    byUser.set(author.matricule, entry)
+  }
+  return [...byUser.values()]
+    .sort((a, b) => b.count - a.count || norm(a.author.nom).localeCompare(norm(b.author.nom)))
+    .slice(0, 3)
+}
+
+function computeActivity(users, comments) {
+  const now = Date.now()
+  const all = collectMessages(comments)
+  const reported = all.filter(m => reportCount(m) > 0)
+  const replyCount = m => repliesOf(m).filter(hasVisible).length
+  const withReplies = all
+    .filter(m => replyCount(m) > 0)
+    .sort((a, b) => replyCount(b) - replyCount(a) || byDateDesc(a, b))
+
+  // Répartition exclusive : bloqué > connecté > non connecté
+  const blocked = users.filter(u => u.status === false).length
+  const connected = users.filter(u => u.status !== false && u.connecte).length
+  const roles = { etudiant: 0, prof: 0, admin: 0 }
+  users.forEach(u => { roles[roleKey(u.role)] += 1 })
+
+  return {
+    messages: {
+      total: all.length,
+      roots: all.filter(m => !m.isReply).length,
+      replies: all.filter(m => m.isReply).length,
+      created: countByPeriod(all, m => m.dateDePublication, now),
+      reportedTotal: reported.length,
+      reported: countByPeriod(reported, m => m.dateDePublication, now),
+      withReplies
+    },
+    users: {
+      total: users.length,
+      connected,
+      blocked,
+      offline: users.length - connected - blocked,
+      created: countByPeriod(users, u => u.dateInscription, now),
+      roles
+    },
+    top: {
+      publishers: topContributors(all),
+      responders: topContributors(all.filter(m => m.isReply))
+    }
+  }
+}
+
+function StatCard({ label, value, sub, accent }) {
+  return (
+    <div className={`stat-card ${accent ? 'accent' : ''}`}>
+      <span className="stat-label">{label}</span>
+      <strong className="stat-value">{value}</strong>
+      {sub && <span className="stat-sub">{sub}</span>}
+    </div>
+  )
+}
+
+function PeriodCards({ total, totalSub, byPeriod }) {
+  return (
+    <div className="stat-grid">
+      <StatCard label="Total global" value={total} sub={totalSub} accent />
+      {ACTIVITY_PERIODS.map(period => (
+        <StatCard key={period.key} label={period.label} value={byPeriod[period.key]} />
+      ))}
+    </div>
+  )
+}
+
+function RoleBars({ roles, total }) {
+  const rows = [
+    { key: 'etudiant', label: 'Étudiants', value: roles.etudiant },
+    { key: 'prof', label: 'Professeurs', value: roles.prof },
+    { key: 'admin', label: 'Administrateurs', value: roles.admin }
+  ]
+  return (
+    <div className="stat-panel">
+      {rows.map(row => {
+        const pct = total ? Math.round((row.value / total) * 100) : 0
+        return (
+          <div className="stat-bar-row" key={row.key}>
+            <span>{row.label}</span>
+            <div className="stat-bar-track">
+              <div className={`stat-bar-fill ${row.key}`} style={{ width: `${pct}%` }} />
+            </div>
+            <span className="stat-bar-value">{row.value} <small>({pct}%)</small></span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ContributorPanel({ title, units, list }) {
+  return (
+    <div className="stat-panel">
+      <h4 className="stat-panel-title">{title}</h4>
+      {list.length === 0 ? (
+        <p className="stats-note">Aucune donnée pour le moment.</p>
+      ) : (
+        <ol className="contrib-list">
+          {list.map((entry, index) => {
+            const a = entry.author
+            const name = [a.prenom, a.nom].filter(Boolean).join(' ') || 'Utilisateur'
+            const staff = isStaffRole(a.role)
+            return (
+              <li key={a.matricule} className={`contrib-item ${index === 0 ? 'first' : ''}`}>
+                <span className={`discussion-avatar ${staff ? 'prof-avatar' : ''}`}>{name[0].toUpperCase()}</span>
+                <span className="contrib-main">
+                  <span className="author-title">
+                    <strong>{name}</strong>
+                    <span className={`role-badge ${staff ? 'prof-badge' : ''}`}>{roleLabel(a.role)}</span>
+                  </span>
+                  <small className="time-ago">{a.matricule}</small>
+                </span>
+                <span className="contrib-count">
+                  <strong>{entry.count}</strong> {units[entry.count > 1 ? 1 : 0]}
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+      )}
+    </div>
+  )
+}
+
+function ActivityContent({ data }) {
+  const { messages: m, users: u, top } = data
+  const [showReplied, setShowReplied] = useState(false)
+  const [openId, setOpenId] = useState(null)
+  const repliedPct = m.total ? Math.round((m.withReplies.length / m.total) * 100) : 0
+
+  return (
+    <div className="stats-content">
+      {/* ---------- Messages ---------- */}
+      <section>
+        <h2 className="stats-section-title">Messages</h2>
+
+        <h3 className="stats-subtitle">Messages créés</h3>
+        <PeriodCards
+          total={m.total}
+          totalSub={`${m.roots} discussion${m.roots > 1 ? 's' : ''} · ${m.replies} réponse${m.replies > 1 ? 's' : ''}`}
+          byPeriod={m.created}
+        />
+
+        <h3 className="stats-subtitle">Messages signalés</h3>
+        <PeriodCards total={m.reportedTotal} totalSub="En attente de modération" byPeriod={m.reported} />
+        <p className="stats-note">
+          Les périodes se basent sur la date de publication du message signalé (la date du signalement n'est pas enregistrée).
+        </p>
+
+        <h3 className="stats-subtitle">Messages avec au moins une réponse</h3>
+        <div className="stat-grid">
+          <StatCard label="Messages avec réponse" value={m.withReplies.length} sub={`${repliedPct} % des messages`} accent />
+        </div>
+        {m.withReplies.length > 0 && (
+          <div className="stats-toggle-row">
+            <button type="button" className="mod-chip" aria-expanded={showReplied} onClick={() => setShowReplied(v => !v)}>
+              {showReplied ? 'Masquer la liste' : 'Voir la liste'}
+            </button>
+          </div>
+        )}
+        {showReplied && (
+          <div className="mod-list">
+            {m.withReplies.map(item => {
+              const id = String(item.id)
+              const open = openId === id
+              return <CommentRow key={id} id={id} item={item} open={open} onToggle={() => setOpenId(open ? null : id)} />
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* ---------- Utilisateurs ---------- */}
+      <section>
+        <h2 className="stats-section-title">Utilisateurs</h2>
+
+        <h3 className="stats-subtitle">Comptes</h3>
+        <div className="stat-grid">
+          <StatCard label="Total utilisateurs" value={u.total} accent />
+          <StatCard label="Connectés" value={u.connected} />
+          <StatCard label="Non connectés" value={u.offline} />
+          <StatCard label="Bloqués" value={u.blocked} />
+        </div>
+
+        <h3 className="stats-subtitle">Nouveaux utilisateurs</h3>
+        <PeriodCards total={u.total} byPeriod={u.created} />
+
+        <h3 className="stats-subtitle">Répartition par rôle</h3>
+        <RoleBars roles={u.roles} total={u.total} />
+      </section>
+
+      {/* ---------- Top contributeurs ---------- */}
+      <section>
+        <h2 className="stats-section-title">Top contributeurs</h2>
+        <div className="contrib-grid">
+          <ContributorPanel title="Plus de messages publiés" units={['message', 'messages']} list={top.publishers} />
+          <ContributorPanel title="Plus de réponses" units={['réponse', 'réponses']} list={top.responders} />
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function Activity({ onError }) {
+  const [data, setData] = useState(null)
+  const [failed, setFailed] = useState(false)
+  const [tick, setTick] = useState(0)
+
+  // Tout événement WebSocket (message, connexion, déconnexion, inscription) recharge les chiffres
+  useMessagesSocket(() => setTick(v => v + 1))
+
+  useEffect(() => {
+    const t = setInterval(() => setTick(v => v + 1), 60000)
+    return () => clearInterval(t)
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    Promise.all([api.moderation.users(), api.moderation.comments()])
+      .then(([users, comments]) => {
+        if (!alive) return
+        setData(computeActivity(users, comments))
+        setFailed(false)
+      })
+      .catch(e => {
+        if (!alive) return
+        setFailed(true)
+        onError(e.message)
+      })
+    return () => { alive = false }
+  }, [tick])
+
+  return (
+    <>
+      <main className="study-space">
+        <div className="study-header">
+          <h1>Activités</h1>
+          <p>Analyse 2 - Statistiques de la plateforme</p>
+        </div>
+
+        {data === null
+          ? <p className="mod-empty">{failed ? 'Impossible de charger les statistiques.' : 'Chargement...'}</p>
+          : <ActivityContent data={data} />}
+      </main>
+      <Footer/>
+    </>
+  )
+}
+
 export default function App() { 
   const [screen, setScreen] = useState(pathToScreen())
   const [user, setUser] = useState(() => {
@@ -2184,9 +2716,10 @@ return (
         />
       )}
       {screen === 'moderation' && isAdmin(user) && <Moderation navigate={navigate}/>}
-      {isModerationScreen && screen !== 'moderation' && isAdmin(user) && (
+      {isModerationScreen && screen !== 'moderation' && screen !== 'activity' && isAdmin(user) && (
         <ModerationList key={screen} kind={screen.replace('moderation-', '')} onError={setError}/>
       )}
+      {screen === 'activity' && isAdmin(user) && <Activity onError={setError}/>}
       {screen === 'comments' && !adminBlocked && <Comments user={user} onError={setError} onPublished={(mode = 'publish') => setSuccessDialogMode(mode)}/>}
       
       {successDialogMode && (
