@@ -367,22 +367,28 @@ function relativeDate(value) {
   return days < 7 ? `il y a ${days} j` : date.toLocaleDateString('fr-FR')
 }
 
-// Écoute la WebSocket des messages : reconnexion automatique, et resynchronisation à chaque (re)connexion
-function useMessagesSocket(onEvent) {
-  const handler = useRef(onEvent)
-  handler.current = onEvent
+// Pub/sub interne : un seul WebSocket pour toute l'app, plusieurs composants peuvent écouter.
+const socketListeners = new Set()
+function emitSocketEvent(event) {
+  socketListeners.forEach(listener => listener(event))
+}
 
+// Ouvre/ferme la connexion WS réelle, branchée sur le cycle de vie de la session utilisateur.
+// Appelé une seule fois, dans App(), avec user?.matricule.
+function useSocketConnection(matricule) {
   useEffect(() => {
-    if (!socketUrl) return // mode démo : pas de serveur
+    if (!socketUrl) return   // mode démo : pas de serveur
+    if (!matricule) return   // pas connecté : aucune session WS à ouvrir
+
     let ws = null
     let timer = null
     let closed = false
     let delay = 1000
 
     const connect = () => {
-      try { ws = new WebSocket(socketUrl()) } catch { return }
-      ws.onopen = () => { delay = 1000; handler.current({ type: 'OPEN' }) }
-      ws.onmessage = e => { try { handler.current(JSON.parse(e.data)) } catch { /* message ignoré */ } }
+      try { ws = new WebSocket(socketUrl(matricule)) } catch { return }
+      ws.onopen = () => { delay = 1000; emitSocketEvent({ type: 'OPEN' }) }
+      ws.onmessage = e => { try { emitSocketEvent(JSON.parse(e.data)) } catch { /* message ignoré */ } }
       ws.onerror = () => ws.close()
       ws.onclose = () => {
         if (closed) return
@@ -393,6 +399,18 @@ function useMessagesSocket(onEvent) {
 
     connect()
     return () => { closed = true; clearTimeout(timer); ws?.close() }
+  }, [matricule]) // login (matricule apparaît) ouvre la session, logout (matricule devient undefined) la ferme
+}
+
+// Écoute passive des événements de la socket partagée. Utilisé dans Comments, ModerationList, etc.
+function useMessagesSocket(onEvent) {
+  const handler = useRef(onEvent)
+  handler.current = onEvent
+
+  useEffect(() => {
+    const listener = event => handler.current(event)
+    socketListeners.add(listener)
+    return () => socketListeners.delete(listener)
   }, [])
 }
 
@@ -2045,6 +2063,8 @@ export default function App() {
   const [account, setAccount] = useState(false)
   const [returnTo, setReturnTo] = useState('study')
   const [error, setError] = useState('')
+
+  useSocketConnection(user?.matricule)
 
   useEffect(() => {
     const f = () => setScreen(pathToScreen())
