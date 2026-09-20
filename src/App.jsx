@@ -1085,7 +1085,7 @@ function ModerationList({ kind, onError }) {
   const [role, setRole] = useState('all')
   const [openId, setOpenId] = useState(null)
   const [tick, setTick] = useState(0)
-  useMessagesSocket(() => { if (kind !== 'users') setTick(v => v + 1) }) // un seul élément ouvert à la fois
+  useMessagesSocket(() => { if (kind !== 'users') setTick(v => v + 1) }, user?.matricule) 
 
   useEffect(() => {
     let alive = true
@@ -1311,7 +1311,7 @@ function Comments({ user, onError, onPublished }) {
   const [editSubmitting, setEditSubmitting] = useState(false)
   const [deleteId, setDeleteId] = useState(null)
   const [deleting, setDeleting] = useState(false)
-  useMessagesSocket(() => setTick(v => v + 1))
+  useMessagesSocket(() => setTick(v => v + 1), user?.matricule)
   
   useEffect(() => {
     const t = setInterval(() => setTick(v => v + 1), 300000)
