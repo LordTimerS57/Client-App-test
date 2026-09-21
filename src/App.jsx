@@ -1,4 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
+import { norm, splitTerms } from './utils/text'
+import { isStaffRole, roleLabel, roleKey, ROLE_FILTERS } from './utils/roles'
+import { relativeDate, toDayKey, formatDay, byDateDesc } from './utils/dates'
+import {
+  reportCount, hasVisible, commentAuthor, messageTime,
+  filterThread, COMMENT_ROLE_FILTERS, COMMENT_SORTS
+} from './utils/messages'
 import './styles.css'
 import logo from './assets/logo.jpg' 
 
@@ -56,35 +63,6 @@ const toList = (res, keys = []) => {
   for (const key of keys) if (Array.isArray(res?.[key])) return res[key]
   return []
 }
-
-// Nombre de signalements d'un message (le champ exact dépend du backend : booléen, nombre ou liste)
-const reportCount = message => {
-  if (message?.statut === 'SIGNALE') return 1
-  const value = message?.signale ?? message?.signaled ?? message?.reported ?? message?.signalements ?? message?.nbSignalements
-  if (Array.isArray(value)) return value.length
-  if (typeof value === 'number') return value
-  return value === true || value === 'true' ? 1 : 0
-}
-
-const normalizeRole = role => String(role || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase()
-const isStaffRole = role => /^(ADMIN|PROF)/.test(normalizeRole(role))
-const roleLabel = role => {
-  const r = normalizeRole(role)
-  return r.startsWith('ADMIN') ? 'Administrateur' : r.startsWith('PROF') ? 'Professeur' : 'Étudiant'
-}
-// Recherche insensible à la casse et aux accents
-const norm = text => String(text ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-const roleKey = role => {
-  const r = normalizeRole(role)
-  return r.startsWith('ADMIN') ? 'admin' : r.startsWith('PROF') ? 'prof' : 'etudiant'
-}
-const ROLE_FILTERS = [
-  { key: 'all', label: 'Tous' },
-  { key: 'etudiant', label: 'Étudiants' },
-  { key: 'prof', label: 'Professeurs' },
-  { key: 'admin', label: 'Administrateurs' }
-]
-const byDateDesc = (a, b) => (Date.parse(b?.dateDePublication) || 0) - (Date.parse(a?.dateDePublication) || 0)
 
 function withoutPassword(user) {
   const { motDePasse, ...safe } = user
@@ -354,19 +332,6 @@ function pathToScreen(path = window.location.pathname) {
   if (clean === `${BASE}/account/password` || clean === '/account/password') return 'edit-password'
   if (clean === `${BASE}/activity` || clean === '/activity') return 'activity'
   return 'home'
-}
-
-function relativeDate(value) {
-  const date = new Date(value)
-  if (!value || Number.isNaN(date.getTime())) return ''
-  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000))
-  if (seconds < 30) return "à l'instant"
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `il y a ${minutes} min`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `il y a ${hours} h`
-  const days = Math.floor(hours / 24)
-  return days < 7 ? `il y a ${days} j` : date.toLocaleDateString('fr-FR')
 }
 
 // Pub/sub interne : un seul WebSocket pour toute l'app, plusieurs composants peuvent écouter.
@@ -924,7 +889,6 @@ const MODERATION_PAGES = {
   }
 }
 
-const commentAuthor = item => item.envoyeur || item.author || {}
 const userText = user => [user.prenom, user.nom, user.matricule, user.email].join(' ')
 const commentText = item => {
   const author = commentAuthor(item)
@@ -1179,55 +1143,6 @@ function ModerationList({ kind, onError }) {
     </>
   )
 }
-
-const COMMENT_ROLE_FILTERS = [
-  { key: 'prof', label: 'Prof' },
-  { key: 'etudiant', label: 'Étudiants' }
-]
-const COMMENT_SORTS = [
-  { key: 'oldest', label: 'Ancienne' },
-  { key: 'recent', label: 'Récente' }
-]
-
-const messageAuthor = m => m.author || m.envoyeur || {}
-const messageText = m => m.contenu || m.content || ''
-const messageChildren = m => m.replies || m.messagesReponses || []
-const messageTime = m => Date.parse(m?.dateDePublication) || 0
-const splitTerms = text => norm(text).split(/\s+/).filter(Boolean)
-const toDayKey = value => {
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return ''
-  const pad = n => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
-}
-const formatDay = key => (key ? new Date(`${key}T00:00:00`).toLocaleDateString('fr-FR') : '')
-
-// Garde un message s'il correspond aux critères, ou si l'une de ses réponses correspond
-// (le parent reste alors affiché pour donner le contexte).
-// L'objet d'une réponse est celui de son fil (les réponses ont toutes l'objet « Réponse »).
-function filterThread(node, criteria, parentObjet = '') {
-  const objetPath = `${parentObjet} ${node.objet || ''}`
-  const children = messageChildren(node)
-    .map(child => filterThread(child, criteria, objetPath))
-    .filter(Boolean)
-
-  const author = messageAuthor(node)
-  const haystack = norm(`${author.prenom || ''} ${author.nom || ''} ${messageText(node)}`)
-  const objetHaystack = norm(objetPath)
-
-  const matches =
-    node.statut !== 'SUPPRIME' &&
-    (criteria.role === 'all' || roleKey(author.role) === criteria.role) &&
-    (!criteria.day || toDayKey(node.dateDePublication) === criteria.day) &&
-    criteria.terms.every(term => haystack.includes(term)) &&
-    criteria.objetTerms.every(term => objetHaystack.includes(term))
-
-  if (!matches && children.length === 0) return null
-  return { ...node, replies: children, messagesReponses: children, repliesCount: children.length }
-}
-
-
-const hasVisible = m => m.statut !== 'SUPPRIME' || (m.replies || m.messagesReponses || []).some(hasVisible)
 
 function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds, editingId, editText, setEditText, onToggleEdit, onSubmitEdit, onDelete }) {
   const author = item.author ? item.author : (item.envoyeur || {})
