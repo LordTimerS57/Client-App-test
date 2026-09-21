@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 
-import { isStaffRole, roleLabel, isAdmin } from './utils/roles'
+import { isAdmin } from './utils/roles'
 
 import { ROUTES, EDIT_SCREENS, MODERATION_SCREENS, ADMIN_SCREENS, pathToScreen } from './config/routes'
 
@@ -22,7 +22,11 @@ import { ModerationList } from './pages/ModerationList'
 import { Auth } from './pages/Auth'
 import { EditAccount } from './pages/EditAccount'
 import { Comments } from './pages/Comments'
-import { ACTIVITY_PERIODS, computeActivity } from './utils/activity'
+import { computeActivity } from './utils/activity'
+import { StatCard } from './components/activity/StatCard'
+import { PeriodCards } from './components/activity/PeriodCards'
+import { RoleBars } from './components/activity/RoleBars'
+import { ContributorPanel } from './components/activity/ContributorPanel'
 
 
 function Account({ user, close, logout, onEdit }) { 
@@ -85,85 +89,6 @@ function Account({ user, close, logout, onEdit }) {
       </section>
     </div>
   ) 
-}
-
-function StatCard({ label, value, sub, accent }) {
-  return (
-    <div className={`stat-card ${accent ? 'accent' : ''}`}>
-      <span className="stat-label">{label}</span>
-      <strong className="stat-value">{value}</strong>
-      {sub && <span className="stat-sub">{sub}</span>}
-    </div>
-  )
-}
-
-function PeriodCards({ total, totalSub, byPeriod }) {
-  return (
-    <div className="stat-grid">
-      <StatCard label="Total global" value={total} sub={totalSub} accent />
-      {ACTIVITY_PERIODS.map(period => (
-        <StatCard key={period.key} label={period.label} value={byPeriod[period.key]} />
-      ))}
-    </div>
-  )
-}
-
-function RoleBars({ roles, total }) {
-  const rows = [
-    { key: 'etudiant', label: 'Étudiants', value: roles.etudiant },
-    { key: 'prof', label: 'Professeurs', value: roles.prof },
-    { key: 'admin', label: 'Administrateurs', value: roles.admin }
-  ]
-  return (
-    <div className="stat-panel">
-      {rows.map(row => {
-        const pct = total ? Math.round((row.value / total) * 100) : 0
-        return (
-          <div className="stat-bar-row" key={row.key}>
-            <span>{row.label}</span>
-            <div className="stat-bar-track">
-              <div className={`stat-bar-fill ${row.key}`} style={{ width: `${pct}%` }} />
-            </div>
-            <span className="stat-bar-value">{row.value} <small>({pct}%)</small></span>
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function ContributorPanel({ title, units, list }) {
-  return (
-    <div className="stat-panel">
-      <h4 className="stat-panel-title">{title}</h4>
-      {list.length === 0 ? (
-        <p className="stats-note">Aucune donnée pour le moment.</p>
-      ) : (
-        <ol className="contrib-list">
-          {list.map((entry, index) => {
-            const a = entry.author
-            const name = [a.prenom, a.nom].filter(Boolean).join(' ') || 'Utilisateur'
-            const staff = isStaffRole(a.role)
-            return (
-              <li key={a.matricule} className={`contrib-item ${index === 0 ? 'first' : ''}`}>
-                <span className={`discussion-avatar ${staff ? 'prof-avatar' : ''}`}>{name[0].toUpperCase()}</span>
-                <span className="contrib-main">
-                  <span className="author-title">
-                    <strong>{name}</strong>
-                    <span className={`role-badge ${staff ? 'prof-badge' : ''}`}>{roleLabel(a.role)}</span>
-                  </span>
-                  <small className="time-ago">{a.matricule}</small>
-                </span>
-                <span className="contrib-count">
-                  <strong>{entry.count}</strong> {units[entry.count > 1 ? 1 : 0]}
-                </span>
-              </li>
-            )
-          })}
-        </ol>
-      )}
-    </div>
-  )
 }
 
 function ActivityContent({ data }) {
