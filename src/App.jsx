@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
+
 import { norm, splitTerms } from './utils/text'
-import { isStaffRole, roleLabel, roleKey, ROLE_FILTERS } from './utils/roles'
+
+import { isStaffRole, roleLabel, roleKey, isAdmin, ROLE_FILTERS } from './utils/roles'
 import { relativeDate, toDayKey, formatDay, byDateDesc } from './utils/dates'
 import {
   reportCount, hasVisible, commentAuthor, messageTime,
   filterThread, COMMENT_ROLE_FILTERS, COMMENT_SORTS
 } from './utils/messages'
+
+import { ROUTES, EDIT_SCREENS, MODERATION_SCREENS, ADMIN_SCREENS, pathToScreen } from './config/routes'
+
 import './styles.css'
 import logo from './assets/logo.jpg' 
 
@@ -286,52 +291,6 @@ const api = {
 }
 
   }
-}
-
-const BASE = '/Ne-laiko'
-
-const ROUTES = {
-  home: `${BASE}/`,
-  login: `${BASE}/login`,
-  register: `${BASE}/register`,
-  study: `${BASE}/study`,
-  comments: `${BASE}/study/comments`,
-  moderation: `${BASE}/moderation`,
-  'moderation-users': `${BASE}/moderation/users`,
-  'moderation-comments': `${BASE}/moderation/comments`,
-  'moderation-reports': `${BASE}/moderation/reports`,
-  'edit-profile': `${BASE}/account/profile`,
-  'edit-email': `${BASE}/account/email`,
-  'edit-password': `${BASE}/account/password`,
-  activity: `${BASE}/activity`,
-}
-
-const EDIT_SCREENS = ['edit-profile', 'edit-email', 'edit-password']
-const MODERATION_SCREENS = ['moderation', 'moderation-users', 'moderation-comments', 'moderation-reports', 'activity']
-const ADMIN_SCREENS = ['home', 'login', 'register', ...EDIT_SCREENS, ...MODERATION_SCREENS]
-
-// Compte administrateur : e-mail défini dans .env (VITE_ADMIN_EMAIL) ou rôle 'ADMIN' renvoyé par le backend.
-// ⚠ Simple aiguillage d'interface : les droits réels doivent aussi être contrôlés côté serveur.
-const ADMIN_EMAIL = (import.meta.env?.VITE_ADMIN_EMAIL || 'admin@ne-laiko.com').trim().toLowerCase()
-const isAdmin = user =>
-  !!user && (String(user.role || '').toUpperCase() === 'ADMIN' || (user.email || '').trim().toLowerCase() === ADMIN_EMAIL)
-const emptyRegistration = { matricule: '', nom: '', prenom: '', email: '', motDePasse: '', etudiant: true }
-
-function pathToScreen(path = window.location.pathname) {
-  const clean = path.replace(/\/$/, '') || '/'
-  if (clean === `${BASE}/login` || clean === '/login') return 'login'
-  if (clean === `${BASE}/register` || clean === '/register') return 'register'
-  if (clean === `${BASE}/study/comments` || clean === '/study/comments') return 'comments'
-  if (clean === `${BASE}/study` || clean === '/study') return 'study'
-  if (clean === `${BASE}/moderation/users` || clean === '/moderation/users') return 'moderation-users'
-  if (clean === `${BASE}/moderation/comments` || clean === '/moderation/comments') return 'moderation-comments'
-  if (clean === `${BASE}/moderation/reports` || clean === '/moderation/reports') return 'moderation-reports'
-  if (clean === `${BASE}/moderation` || clean === '/moderation') return 'moderation'
-  if (clean === `${BASE}/account/profile` || clean === '/account/profile') return 'edit-profile'
-  if (clean === `${BASE}/account/email` || clean === '/account/email') return 'edit-email'
-  if (clean === `${BASE}/account/password` || clean === '/account/password') return 'edit-password'
-  if (clean === `${BASE}/activity` || clean === '/activity') return 'activity'
-  return 'home'
 }
 
 // Pub/sub interne : un seul WebSocket pour toute l'app, plusieurs composants peuvent écouter.

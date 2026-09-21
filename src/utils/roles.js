@@ -19,3 +19,10 @@ export const ROLE_FILTERS = [
   { key: 'prof', label: 'Professeurs' },
   { key: 'admin', label: 'Administrateurs' }
 ]
+
+// Compte administrateur : e-mail défini dans .env (VITE_ADMIN_EMAIL) ou rôle 'ADMIN' renvoyé par le backend.
+// ⚠ Simple aiguillage d'interface : les droits réels doivent aussi être contrôlés côté serveur.
+export const ADMIN_EMAIL = (import.meta.env?.VITE_ADMIN_EMAIL || 'admin@ne-laiko.com').trim().toLowerCase()
+
+export const isAdmin = user =>
+  !!user && (String(user.role || '').toUpperCase() === 'ADMIN' || (user.email || '').trim().toLowerCase() === ADMIN_EMAIL)
