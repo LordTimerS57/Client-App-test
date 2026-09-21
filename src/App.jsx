@@ -20,6 +20,10 @@ import { Footer } from './components/layout/Footer'
 import { Menu } from './components/layout/Menu'
 import { Home } from './components/layout/Home'
 import { Header } from './components/layout/Header'
+import { SuccessModal } from './components/modals/SuccessModal'
+import { ConfirmPublishModal } from './components/modals/ConfirmPublishModal'
+import { ErrorModal } from './components/modals/ErrorModal'
+import { ConfirmSecretModal } from './components/modals/ConfirmSecretModal'
 
 
 const emptyRegistration = { matricule: '', nom: '', prenom: '', email: '', motDePasse: '' }
@@ -1239,104 +1243,6 @@ function Account({ user, close, logout, onEdit }) {
   ) 
 }
 
-const SUCCESS_CONTENT = {
-  emailVerified: {
-    title: 'Email validé',
-    text: 'Votre adresse email a bien été confirmée.',
-    button: 'Continuer'
-  },
-  reply: {
-    title: 'Réponse envoyée',
-    text: 'Votre réponse a bien été publiée sous ce commentaire.',
-    button: 'D’accord'
-  },
-  edit: {
-    title: 'Commentaire modifié',
-    text: 'Votre commentaire a bien été mis à jour.',
-    button: 'D’accord'
-  },
-  delete: {
-    title: 'Commentaire supprimé',
-    text: 'Votre commentaire a bien été supprimé.',
-    button: 'D’accord'
-  },
-  report: {
-    title: 'Signalement envoyé',
-    text: 'Merci, ce commentaire a été transmis à la modération.',
-    button: 'D’accord'
-  },
-  login: {
-    title: 'Connexion réussie',
-    text: 'Vous pouvez passer à l’étape suivante',
-    button: 'Ok'
-  },
-  register: {
-    title: 'Inscription terminée',
-    text: 'Merci d’être inscrit à Ne-laiko',
-    button: 'Continuer'
-  },
-  logout: {
-    title: 'Déconnexion réussie',
-    text: 'Vous avez été déconnecté avec succès. À bientôt !',
-    button: 'Ok'
-  },
-  publish: {
-    title: 'Commentaire publié',
-    text: 'Votre commentaire a bien été publié et est désormais visible par les autres utilisateurs.',
-    button: 'D’accord'
-  },
-  update: {
-    title: 'Modification réussie',
-    text: 'Vous pouvez maintenant retourner où vous en êtes actuellement',
-    button: 'D’accord'
-  }
-}
-
-function SuccessModal({ mode, onConfirm }) {
-  const content = SUCCESS_CONTENT[mode] || SUCCESS_CONTENT.login
-  return (
-    <div className="modal-backdrop">
-      <div className="validation-dialog">
-        <div className="status-circle success-circle">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#16a34a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12"/>
-          </svg>
-        </div>
-        <h2>{content.title}</h2>
-        <p>{content.text}</p>
-        <button className="dialog-btn success-btn" onClick={onConfirm}>
-          {content.button}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function ConfirmPublishModal({
-  busy, onConfirm, onCancel,
-  title = 'Confirmation de publication',
-  text = <>Voulez-vous vraiment publier<br />ce commentaire ?</>
-}) {
-  return (
-    <div className="modal-backdrop" onClick={busy ? undefined : onCancel}>
-      <div
-        className="validation-dialog confirm-dialog"
-        role="dialog"
-        aria-modal="true"
-        onClick={e => e.stopPropagation()}
-      >
-        <button type="button" className="close-button" onClick={onCancel} disabled={busy} aria-label="Fermer">×</button>
-        <h2>{title}</h2>
-        <p>{text}</p>
-        <div className="dialog-actions">
-          <button type="button" className="dialog-btn secondary-btn" onClick={onConfirm} disabled={busy}>Oui</button>
-          <button type="button" className="dialog-btn" onClick={onCancel} disabled={busy}>Non</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 const EDIT_CONFIG = {
   email: {
     title: 'Changement d’email',
@@ -1356,69 +1262,6 @@ const EDIT_CONFIG = {
     submit: 'Procéder',
     confirm: false
   }
-}
-
-// Fenêtre de confirmation commune : mot de passe (infos, email) ou code reçu par email (mot de passe)
-function ConfirmSecretModal({ title, text, label, submitLabel = 'Modifier', secret = 'password', busy, onConfirm, onCancel, onResend }) {
-  const [value, setValue] = useState('')
-  const isCode = secret === 'code'
-
-  function submit(e) {
-    e.preventDefault()
-    if (busy || !value) return
-    onConfirm(value)
-  }
-
-  return (
-    <div className="modal-backdrop" onClick={busy ? undefined : onCancel}>
-      <form
-        className="validation-dialog confirm-dialog confirm-password-dialog"
-        role="dialog"
-        aria-modal="true"
-        onClick={e => e.stopPropagation()}
-        onSubmit={submit}
-      >
-        <button type="button" className="close-button" onClick={onCancel} disabled={busy} aria-label="Fermer">×</button>
-        <h2>{title}</h2>
-        <p>{text}</p>
-        <div className="input-group">
-          <label htmlFor="confirm-secret">{label}</label>
-          {isCode ? (
-            <input
-              id="confirm-secret"
-              className="code-input"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              maxLength={6}
-              placeholder="000000"
-              value={value}
-              onChange={e => setValue(e.target.value.replace(/\D/g, ''))}
-              autoFocus
-              required
-            />
-          ) : (
-            <PasswordField
-              id="confirm-secret"
-              name="confirmPassword"
-              value={value}
-              onChange={e => setValue(e.target.value)}
-              autoComplete="current-password"
-              autoFocus
-            />
-          )}
-          {onResend && (
-            <button type="button" className="inline-link resend-link" onClick={onResend} disabled={busy}>
-              Renvoyer le code
-            </button>
-          )}
-        </div>
-        <div className="dialog-actions dialog-actions-end">
-          <button type="button" className="dialog-btn secondary-btn" onClick={onCancel} disabled={busy}>Annuler</button>
-          <button type="submit" className="dialog-btn" disabled={busy || !value || (isCode && value.length !== 6)}>{submitLabel}</button>
-        </div>
-      </form>
-    </div>
-  )
 }
 
 // Pages de modification du compte : mode = 'email' | 'profile' | 'password'
@@ -1624,26 +1467,6 @@ function EditAccount({ mode, user, onSuccess, onError, onCancel }) {
       ))}
     </>
   )
-}
-
-function ErrorModal({ message, close }) { 
-  return (
-    <div className="modal-backdrop" onClick={close}>
-      <div className="validation-dialog" onClick={e => e.stopPropagation()}>
-        <div className="status-circle error-circle">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </div>
-        <h2>Une erreur est survenue</h2>
-        <p>{message}</p>
-        <button className="dialog-btn error-btn" onClick={close}>
-          Fermer
-        </button>
-      </div>
-    </div>
-  ) 
 }
 
 // ================= Page Activités (admin) =================
