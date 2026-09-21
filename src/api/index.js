@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_API_URL || '/api'
+export const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 async function request(path, options = {}) {
   const response = await fetch(`${API_URL}${path}`, { headers: { 'Content-Type': 'application/json', ...(options.headers || {}) }, ...options })
@@ -41,20 +41,4 @@ export const api = {
     requestPasswordChange: ({ user, newPassword }) => request(accountPath(user, '/password/request'), { method: 'POST', body: JSON.stringify({ newPassword }) }),
     confirmPasswordChange: ({ user, code }) => request(accountPath(user, '/password/confirm'), { method: 'POST', body: JSON.stringify({ code }) }),
   },
-}
-
-// URL de la WebSocket, déduite de VITE_API_URL (/api en dev, URL complète en production).
-// Le matricule est transmis en query param pour que le backend puisse lier la session WS
-// à l'utilisateur connecté (et la fermer proprement au logout).
-export function messagesSocketUrl(matricule) {
-  const base = import.meta.env.VITE_WS_URL || (() => {
-    const url = new URL(API_URL, window.location.href)
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-    url.pathname = url.pathname.replace(/\/api\/?$/, '') + '/ws/messages'
-    return url.toString()
-  })()
-  if (!matricule) return base
-  const url = new URL(base, window.location.href)
-  url.searchParams.set('matricule', matricule)
-  return url.toString()
 }
