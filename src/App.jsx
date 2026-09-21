@@ -15,43 +15,12 @@ import { api } from './api/service'
 import { useSocketConnection } from './hooks/useSocketConnection'
 import { useMessagesSocket } from './hooks/useMessagesSocket'
 import Logo from './components/ui/Logo'
-import Avatar from './components/ui/Avatar'
 import PasswordField from './components/ui/PasswordField'
 import { Footer } from './components/layout/Footer'
 import { Menu } from './components/layout/Menu'
 import { Home } from './components/layout/Home'
+import { Header } from './components/layout/Header'
 
-
-function Header({ user, navigate, onMenu, onAccount, screen }) {
-  const isHome = screen === 'home'
-  return (
-    <header className={`topbar ${!isHome ? 'topbar-light' : ''}`}>
-      <div className="topbar-left">
-        {!isHome && (
-          <button className="menu-button" onClick={onMenu} title="Menu">
-            <svg width="18" height="14" viewBox="0 0 18 14" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M1 1H17M1 7H17M1 13H17" stroke="white" strokeWidth="2" strokeLinecap="round"/>
-            </svg>
-          </button>
-        )}
-        <button className="brand-button" onClick={() => navigate('home')}>
-          <Logo className="header-logo" />
-        </button>
-      </div>
-      <nav className="header-nav">
-        <button className="contact-link">Contact</button>
-        {user ? (
-          <button className="profile-trigger" onClick={onAccount}>
-            <Avatar user={user} />
-            <span className="chevron-down">⌄</span>
-          </button>
-        ) : (
-          <button className="register-link" onClick={() => navigate('register')}>S'inscrire</button>
-        )}
-      </nav>
-    </header>
-  )
-}
 
 const emptyRegistration = { matricule: '', nom: '', prenom: '', email: '', motDePasse: '' }
 
