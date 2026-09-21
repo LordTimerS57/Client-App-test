@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { norm, splitTerms } from './utils/text'
 
-import { isStaffRole, roleLabel, roleKey, isAdmin, ROLE_FILTERS } from './utils/roles'
+import { isStaffRole, roleLabel, roleKey, isAdmin } from './utils/roles'
 import { relativeDate, toDayKey, formatDay, byDateDesc } from './utils/dates'
 import {
   reportCount, hasVisible, commentAuthor, messageTime,
@@ -26,6 +26,9 @@ import { ErrorModal } from './components/modals/ErrorModal'
 import { ConfirmSecretModal } from './components/modals/ConfirmSecretModal'
 import { Study } from './pages/Study'
 import { Moderation } from './pages/Moderation'
+import { UserRow } from './components/moderation/UserRow'
+import { CommentRow } from './components/moderation/CommentRow'
+import { ModerationToolbar } from './components/moderation/ModerationToolbar'
 
 
 const emptyRegistration = { matricule: '', nom: '', prenom: '', email: '', motDePasse: '' }
@@ -234,157 +237,6 @@ const userText = user => [user.prenom, user.nom, user.matricule, user.email].joi
 const commentText = item => {
   const author = commentAuthor(item)
   return [item.contenu || item.content, author.prenom, author.nom, author.matricule].join(' ')
-}
-
-// Ligne d'accordéon générique : en-tête cliquable + panneau de détails
-function AccordionItem({ id, open, onToggle, avatar, staff, title, roleText, meta, preview, aside, children }) {
-  const panelId = `accordion-panel-${id}`
-  return (
-    <article className={`accordion-item ${open ? 'open' : ''}`}>
-      <button type="button" className="accordion-header" onClick={onToggle} aria-expanded={open} aria-controls={panelId}>
-        <span className={`discussion-avatar ${staff ? 'prof-avatar' : ''}`}>{avatar}</span>
-        <span className="accordion-main">
-          <span className="author-title">
-            <strong>{title}</strong>
-            <span className={`role-badge ${staff ? 'prof-badge' : ''}`}>{roleText}</span>
-          </span>
-          {meta && <small className="time-ago">{meta}</small>}
-          {preview && !open && <span className="accordion-preview">{preview}</span>}
-        </span>
-        {aside}
-        <svg className="accordion-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <polyline points="6 9 12 15 18 9"/>
-        </svg>
-      </button>
-      {open && <div className="accordion-panel" id={panelId} role="region">{children}</div>}
-    </article>
-  )
-}
-
-function UserRow({ id, user, open, onToggle }) {
-  const name = [user.prenom, user.nom].filter(Boolean).join(' ') || 'Utilisateur'
-  return (
-    <AccordionItem
-      id={id}
-      open={open}
-      onToggle={onToggle}
-      avatar={(user.prenom || user.nom || 'U')[0].toUpperCase()}
-      staff={isStaffRole(user.role)}
-      title={name}
-      roleText={roleLabel(user.role)}
-      meta={user.matricule}
-    >
-      <dl className="mod-details">
-        <div><dt>Prénoms</dt><dd>{user.prenom || '—'}</dd></div>
-        <div><dt>Nom</dt><dd>{user.nom || '—'}</dd></div>
-        <div><dt>Matricule</dt><dd>{user.matricule || '—'}</dd></div>
-        <div><dt>Email</dt><dd>{user.email || '—'}</dd></div>
-        <div><dt>Connexion</dt><dd>{user.connecte ? 'Connecté' : 'Non connecté'}</dd></div>
-      </dl>
-    </AccordionItem>
-  )
-}
-
-function ReplyThread({ replies }) {
-  if (!replies || replies.length === 0) return null
-  return (
-    <div className="replies-container">
-      {replies.map((reply, index) => {
-        const replyAuthor = reply.author || reply.envoyeur || {}
-        const children = reply.replies || reply.messagesReponses || []
-        return (
-          <div className="reply-card" key={reply.id ?? index}>
-            <div className="author-title">
-              <strong>{replyAuthor.prenom || 'Utilisateur'}</strong>
-              <span className={`role-badge ${isStaffRole(replyAuthor.role) ? 'prof-badge' : ''}`}>
-                {roleLabel(replyAuthor.role)}
-              </span>
-            </div>
-            <p className="reply-content">{reply.content || reply.contenu}</p>
-            <ReplyThread replies={children} />
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-function CommentRow({ id, item, open, onToggle }) {
-  const author = commentAuthor(item)
-  const name = author.prenom || 'Utilisateur'
-  const content = item.contenu || item.content || ''
-  const reports = reportCount(item)
-  const allReplies = item.replies || item.messagesReponses || []
-  const replies = allReplies.filter(reply => reply && typeof reply === 'object')
-  const countReplies = list => list.reduce((n, r) => n + 1 + countReplies(r.replies || r.messagesReponses || []), 0)
-  const repliesCount = item.repliesCount ?? countReplies(replies)
-  const published = new Date(item.dateDePublication)
-  const fullDate = Number.isNaN(published.getTime())
-    ? ''
-    : published.toLocaleString('fr-FR', { dateStyle: 'medium', timeStyle: 'short' })
-
-  return (
-    <AccordionItem
-      id={id}
-      open={open}
-      onToggle={onToggle}
-      avatar={name[0].toUpperCase()}
-      staff={isStaffRole(item.authorRole)}
-      title={name}
-      roleText={roleLabel(item.authorRole)}
-      meta={relativeDate(item.dateDePublication)}
-      preview={content}
-      aside={
-        <span className="accordion-aside">
-          {reports > 0 && <span className="report-badge">{reports} signalement{reports > 1 ? 's' : ''}</span>}
-          <span className="replies-count">{repliesCount} réponse{repliesCount > 1 ? 's' : ''}</span>
-        </span>
-      }
-    >
-      {item.parentContent && (
-        <p className="accordion-meta">
-          ↳ Réponse au commentaire : {item.parentContent.slice(0, 140)}{item.parentContent.length > 140 ? '…' : ''}
-        </p>
-      )}
-      <p className="discussion-content">{content}</p>
-      <p className="accordion-meta">
-        {[author.matricule && `Matricule ${author.matricule}`, fullDate].filter(Boolean).join(' · ')}
-      </p>
-      <ReplyThread replies={replies} />
-    </AccordionItem>
-  )
-}
-
-// Recherche + filtre par rôle (pastilles)
-function ModerationToolbar({ search, onSearch, role, onRole, placeholder }) {
-  return (
-    <div className="mod-toolbar">
-      <div className="search-input-wrapper mod-search">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" strokeWidth="2">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input
-          value={search}
-          onChange={e => onSearch(e.target.value)}
-          placeholder={placeholder}
-          aria-label="Rechercher"
-        />
-      </div>
-      <div className="mod-chips" role="group" aria-label="Filtrer par rôle">
-        {ROLE_FILTERS.map(filter => (
-          <button
-            type="button"
-            key={filter.key}
-            className={`mod-chip ${role === filter.key ? 'active' : ''}`}
-            aria-pressed={role === filter.key}
-            onClick={() => onRole(filter.key)}
-          >
-            {filter.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  )
 }
 
 // Pages de modération : kind = 'users' | 'comments' | 'reports' (accordéon, lecture seule)
