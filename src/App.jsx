@@ -756,19 +756,18 @@ function ModerationList({ kind, onError }) {
   )
 }
 
-function MessageThread({ item, depth, user, isRealData, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds, editingId, editText, setEditText, onToggleEdit, onSubmitEdit, onDelete }) {
-  const author = item.author ? item.author : (item.envoyeur || {})
-  const authorName = item.author ? item.author.prenom : (author.prenom || 'Vous')
-  const authorRole = item.author ? item.author.role : roleLabel(author.role)
-  const initials = item.author?.initials || (authorName[0] || 'F')
-  const isProf = item.author?.isProf || isStaffRole(author.role)
-  const isOther = item.author?.isOther
-  const timeText = item.date || relativeDate(item.dateDePublication)
+function MessageThread({ item, depth, user, replyingId, replyText, setReplyText, onToggleReply, onSubmitReply, submitting, onReport, reportedIds, editingId, editText, setEditText, onToggleEdit, onSubmitEdit, onDelete }) {
+  const author = item.envoyeur || {}
+  // Mon propre message : je peux le modifier / supprimer, mais ni y répondre ni le signaler
+  const isMine = !!user && !!author.matricule && author.matricule === user.matricule
+  const authorName = isMine ? 'Vous' : (author.prenom || 'Utilisateur')
+  const authorRole = roleLabel(author.role)
+  const initials = (author.prenom?.[0] || author.nom?.[0] || '?').toUpperCase()
+  const isProf = isStaffRole(author.role)
+  const timeText = relativeDate(item.dateDePublication)
   const children = (item.replies || item.messagesReponses || []).filter(hasVisible)
   const deleted = item.statut === 'SUPPRIME'
-  // Mon propre message : je peux le modifier / supprimer, mais ni y répondre ni le signaler
-  const isMine = !!user && isRealData && !!author.matricule && author.matricule === user.matricule
-  const canReply = !!user && isRealData && !isMine && !deleted
+  const canReply = !!user && !isMine && !deleted
   const canReport = canReply
   const isReplying = replyingId === item.id
   const isEditing = editingId === item.id
@@ -863,7 +862,6 @@ function MessageThread({ item, depth, user, isRealData, replyingId, replyText, s
               item={child}
               depth={depth + 1}
               user={user}
-              isRealData={isRealData}
               replyingId={replyingId}
               replyText={replyText}
               setReplyText={setReplyText}
@@ -918,17 +916,17 @@ function Comments({ user, onError, onPublished }) {
     return () => clearInterval(t)
   }, [])
 
-  // On charge tout : le filtrage (nom, contenu, objet, rôle, réponses incluses) se fait côté client
-  useEffect(() => { 
-    api.messages.list({})
-      .then(setMessages)
-      .catch(e => onError(e.message)) 
-  }, [tick])
+    // On charge tout : le filtrage (nom, contenu, objet, rôle, réponses incluses) se fait côté client
+  const loadFailed = useRef(false)
 
-  useEffect(() => { 
-    const t = setInterval(() => setTick(v => v + 1), 60000)
-    return () => clearInterval(t) 
-  }, [])
+  useEffect(() => {
+    api.messages.list({})
+      .then(list => { loadFailed.current = false; setMessages(list) })
+      .catch(e => {
+        if (!loadFailed.current) onError(e.message) // une seule alerte tant que le serveur ne répond pas
+        loadFailed.current = true
+      })
+  }, [tick])
 
   // Ferme le menu de filtres au clic à l'extérieur
   useEffect(() => {
@@ -1059,35 +1057,7 @@ function Comments({ user, onError, onPublished }) {
     setDayPickerOpen(false)
   }
 
-  const defaultDiscussions = [
-    {
-      id: 'demo-1',
-      author: { prenom: 'Vous', role: 'Étudiant', isUser: true },
-      date: 'maintenant',
-      content: "Quelqu'un peut m'expliquer la marche à suivre pour le changement de variables avec les intégrales doubles",
-      repliesCount: 0,
-      replies: []
-    },
-    {
-      id: 'demo-2',
-      author: { prenom: 'Marie Leclerc', role: 'Étudiante', initials: 'ML', isOther: true },
-      date: 'il y a 2h',
-      content: "Quelqu'un peut m'expliquer la différence entre intégrale simple et double ?",
-      repliesCount: 2,
-      replies: [
-        {
-          id: 'reply-1',
-          author: { prenom: 'Prof. Dubois', role: 'Professeur', initials: 'PD', isProf: true },
-          date: 'il y a 1h',
-          content: "L'intégrale simple est utilisée pour calculer l'aire sous une courbe dans un plan 2D, tandis que l'intégrale double est utilisée pour des volumes dans l'espace 3D."
-        }
-      ]
-    }
-  ]
-
-  const visibleMessages = messages.filter(hasVisible)
-  const isRealData = visibleMessages.length > 0
-  const baseList = isRealData ? visibleMessages : defaultDiscussions
+  const baseList = messages.filter(hasVisible)
 
   // ---- Filtres ----
   const terms = splitTerms(search)
@@ -1287,6 +1257,10 @@ function Comments({ user, onError, onPublished }) {
           </p>
         )}
 
+        {!filtersActive && displayList.length === 0 && (
+          <p className="mod-empty">Aucun commentaire pour le moment.</p>
+        )}
+
         <section className="discussions-list">
           {displayList.map(item => (
             <MessageThread
@@ -1294,7 +1268,6 @@ function Comments({ user, onError, onPublished }) {
               item={item}
               depth={0}
               user={user}
-              isRealData={isRealData}
               replyingId={replyingId}
               replyText={replyText}
               setReplyText={setReplyText}
@@ -1338,9 +1311,9 @@ function Comments({ user, onError, onPublished }) {
 
 function Account({ user, close, logout, onEdit }) { 
   const [showManageMenu, setShowManageMenu] = useState(false)
-  const fullName = user ? `${user.prenom || ''} ${user.nom || ''}`.trim() : 'Faly Hasiniaina RAKOTOSOA'
-  const email = user?.email || 'hasinarakoko@gmail.com'
-  const initial = user?.prenom?.[0] || 'F'
+  const fullName = `${user.prenom || ''} ${user.nom || ''}`.trim()
+  const email = user.email || ''
+  const initial = (user.prenom?.[0] || '?').toUpperCase()
 
   return (
     <div className="modal-backdrop" onClick={close}>

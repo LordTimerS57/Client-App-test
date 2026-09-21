@@ -52,3 +52,9 @@ export function filterThread(node, criteria, parentObjet = '') {
   if (!matches && children.length === 0) return null
   return { ...node, replies: children, messagesReponses: children, repliesCount: children.length }
 }
+
+export const flattenMessages = (list, parent = null) =>
+  list.flatMap(m => [
+    parent ? { ...m, parentContent: parent.contenu || parent.content } : m,
+    ...flattenMessages(messageChildren(m), m)
+  ])
