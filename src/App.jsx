@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react'
-
-
 import { isAdmin } from './utils/roles'
-
 import { ROUTES, EDIT_SCREENS, MODERATION_SCREENS, ADMIN_SCREENS, pathToScreen } from './config/routes'
-
 import { api } from './api/service'
 import { useSocketConnection } from './hooks/useSocketConnection'
 import Logo from './components/ui/Logo'

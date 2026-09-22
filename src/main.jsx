@@ -1,7 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
-import './styles.css'
+import './styles/styles.css'
 
 // Importez votre logo depuis le dossier assets (adaptez le nom du fichier)
 import logoFavicon from './assets/logo.jpg'

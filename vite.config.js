@@ -5,6 +5,7 @@ export default defineConfig({
   base: '/Ne-laiko/',
   plugins: [react()],
   server: {
+    host: true,
     proxy: {
       '/api': {
         target: process.env.VITE_API_SERVER || 'http://localhost:8080/ExServ',
